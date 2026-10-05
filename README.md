@@ -5,8 +5,9 @@ users upload and understand their resume, define job preferences, search
 jobs across multiple sources, calculate an explainable match score, generate
 tailored application documents, and track applications end to end.
 
-This repository currently implements **V0 — Foundation** and
-**V0.1 — User Profile & Job Preference Intelligence**.
+This repository currently implements **V0 — Foundation**,
+**V0.1 — User Profile & Job Preference Intelligence**, and
+**V0.2 — Resume Intelligence**.
 
 ## 1. What JobPilot is
 
@@ -14,7 +15,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 + V0.1)
+## 2. Current scope (V0 + V0.1 + V0.2)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -53,12 +54,46 @@ V0.1 adds, on top of that foundation:
 See [`docs/architecture.md`](docs/architecture.md) for the full data model
 and the reasoning behind how V0.1 splits these concerns.
 
+V0.2 adds **Resume Intelligence**: turning an uploaded resume into a
+structured, evidence-backed Resume Profile that the user reviews and confirms.
+
+- **Text extraction** from PDF (`pypdf`) and DOCX (`python-docx`). Scanned PDFs
+  are detected and reported as `OCR_REQUIRED` rather than producing an empty
+  profile. OCR itself is a future feature.
+- A **provider-agnostic AI layer** (`AIProvider`), with a real Anthropic
+  implementation using structured outputs. Credentials come only from
+  environment variables, and analysis fails gracefully when no provider is
+  configured.
+- A **versioned resume parser** (`resume_parser_v1`) with a prompt stored as a
+  versioned resource. Its output is validated against a Pydantic schema
+  before anything is stored.
+- A deterministic **truth guard** that checks every evidence quote against
+  the resume text. It drops personal details and summaries that aren't in the
+  resume, removes unmentioned technologies and dates, and resets unsupported
+  skill or language levels to unknown.
+- **Confidence** (extraction certainty) and **evidence** ("where did this come
+  from?", with an in-context source view) on every extracted item.
+- **User review**: accept, edit or reject each item, then confirm. Only a
+  confirmed profile is trusted, and the raw AI output is kept separately.
+- **Conflict detection** between the resume and the user's own profile, for
+  example years of experience or current title. Both values are shown and
+  neither is overwritten.
+- **Resume versions** (new uploads no longer delete old ones), file hashing,
+  and reprocessing. The same file analyzed by the same parser version is never
+  re-analyzed automatically.
+- Dashboard and Profile integration ("Your Profile" vs. "Resume Intelligence").
+
+V0.2 deliberately does **not** search for jobs, compute match scores, or
+generate documents. See [`docs/resume-intelligence.md`](docs/resume-intelligence.md).
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
 | ---------- | ------------------------------------------------------- |
 | Frontend   | Next.js (App Router), React, TypeScript, Tailwind CSS   |
 | Backend    | Python, FastAPI, Pydantic, SQLAlchemy, Alembic          |
+| AI         | Provider-agnostic `AIProvider`; Anthropic implementation |
+| Extraction | pypdf (PDF), python-docx (DOCX)                          |
 | Database   | PostgreSQL                                              |
 | Infra      | Docker Compose (PostgreSQL)                             |
 | Testing    | Pytest (backend), Vitest + Testing Library (frontend)   |
@@ -75,18 +110,22 @@ jobpilot/
 │
 ├── backend/
 │   ├── app/
+│   │   ├── ai/          AI provider abstraction, providers, versioned prompts
 │   │   ├── api/v1/      Routers: auth, users, profile (+ skills/languages/
-│   │   │                  completeness), preferences (+ job-titles/locations), resumes
+│   │   │                  completeness), preferences (+ job-titles/locations),
+│   │   │                  resumes (+ Resume Intelligence)
 │   │   ├── core/        Config, security, logging, error handling
 │   │   ├── db/          SQLAlchemy base + session
 │   │   ├── models/      SQLAlchemy models
 │   │   ├── schemas/     Pydantic request/response schemas
-│   │   └── services/    Business logic, storage abstraction, future interfaces
+│   │   └── services/    Business logic, storage abstraction, resume_intelligence/
+│   │                      pipeline, future interfaces
 │   ├── alembic/         Database migrations
 │   └── tests/           Pytest suite
 │
 ├── docs/
-│   └── architecture.md
+│   ├── architecture.md
+│   └── resume-intelligence.md
 │
 ├── docker-compose.yml   PostgreSQL (dev infrastructure)
 ├── .env.example
@@ -112,6 +151,11 @@ Edit `.env` as needed. Never commit `.env` — it's gitignored. Key variables:
 - `DATABASE_URL` — SQLAlchemy connection string for the backend.
 - `STORAGE_PROVIDER` / `STORAGE_PATH` — resume storage backend (`local` in V0).
 - `NEXT_PUBLIC_API_URL` — base URL the frontend uses to reach the backend API.
+- `AI_PROVIDER` / `ANTHROPIC_API_KEY` / `AI_MODEL` — the AI provider for resume
+  analysis (V0.2). Without an API key, everything else works and resume
+  analysis reports "AI provider not configured". See
+  [`docs/resume-intelligence.md`](docs/resume-intelligence.md#configuration-environment-only)
+  for all AI-related settings.
 
 ## 7. Start PostgreSQL
 
@@ -177,6 +221,8 @@ mypy app                # type check
 Backend tests run against a separate `jobpilot_test` database (the
 `DATABASE_URL` tests use is derived automatically; create the database once
 with `createdb jobpilot_test` or let your Postgres role create it).
+Tests never call a real AI API: they force `AI_PROVIDER=disabled` and inject a
+deterministic fake provider backed by fixtures in `backend/tests/fixtures/resume/`.
 
 Frontend:
 
@@ -188,7 +234,7 @@ npm run typecheck  # tsc --noEmit
 npm run build    # production build sanity check
 ```
 
-## 12. API endpoints (V0 + V0.1)
+## 12. API endpoints (V0 + V0.1 + V0.2)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -219,9 +265,18 @@ GET    /preferences/locations
 POST   /preferences/locations
 DELETE /preferences/locations/{id}
 
-GET    /resumes/current
-POST   /resumes
+GET    /resumes                         all resume versions, newest first
+GET    /resumes/current                 newest version
+POST   /resumes                         upload (creates a new version)
 DELETE /resumes/{id}
+
+POST   /resumes/{id}/process            start analysis (202) or reuse (200); {"force": true} reprocesses
+GET    /resumes/{id}/profile            status, latest attempt, extracted profile, conflicts
+GET    /resumes/{id}/profile/source     extracted text ("View source")
+PATCH  /resumes/{id}/profile/items/{item_id}   accept | edit | reject | reset
+POST   /resumes/{id}/profile/accept-pending
+POST   /resumes/{id}/profile/confirm
+POST   /resumes/{id}/profile/reopen
 ```
 
 Note: `PUT /preferences` and `PUT /profile` replace the fields they cover in
@@ -234,8 +289,8 @@ in `docs/architecture.md`.
 
 ```
 V0     Foundation                  ✅
-V0.1   User Profile & Job Preference Intelligence   ✅ (current)
-V0.2   Resume Intelligence
+V0.1   User Profile & Job Preference Intelligence   ✅
+V0.2   Resume Intelligence         ✅ (current)
 V0.3   Job Discovery
 V0.4   Job Normalization & Deduplication
 V0.5   AI Matching

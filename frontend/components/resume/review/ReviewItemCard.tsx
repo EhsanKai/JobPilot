@@ -151,9 +151,14 @@ function ItemContent({ section, item }: { section: SectionName; item: Reviewable
     }
     case "additional_information": {
       const a = item as AdditionalInfoItem;
+      const label = ADDITIONAL_CATEGORY_LABELS[a.category];
+      // Values are kept as written, which often already include the label
+      // ("Driving license: Class B") -- don't repeat it.
+      const repeatsLabel = a.value.toLowerCase().startsWith(label.toLowerCase());
       return (
         <p className="text-sm text-slate-900">
-          <span className="font-medium">{ADDITIONAL_CATEGORY_LABELS[a.category]}:</span> {a.value}
+          {!repeatsLabel && <span className="font-medium">{label}: </span>}
+          {a.value}
         </p>
       );
     }

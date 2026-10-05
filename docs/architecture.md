@@ -1,8 +1,10 @@
-# JobPilot Architecture — V0 & V0.1
+# JobPilot Architecture — V0, V0.1 & V0.2
 
-This document captures the architectural decisions behind the V0 foundation
-and the V0.1 structured Job Search Profile, and how later versions are
-expected to build on both without a rewrite.
+This document captures the architectural decisions behind the V0 foundation,
+the V0.1 structured Job Search Profile and V0.2 Resume Intelligence, and how
+later versions are expected to build on them without a rewrite. V0.2 is
+summarized in §12 and documented in full in
+[`resume-intelligence.md`](resume-intelligence.md).
 
 ## 1. Layered, modular pipeline
 
@@ -45,17 +47,29 @@ provider's API or scraping logic.
 
 ## 4. AI-provider-agnostic design
 
-`app/services/integrations/ai_provider.py` defines abstract interfaces
-(`AIProvider`, `ResumeParser`, `JobMatcher`, `CoverLetterGenerator`) that
-future implementations (OpenAI, Anthropic, Google, a local LLM) will
-satisfy. No AI calls are made in V0 — these are placeholders so later
-versions don't require redesigning how AI is wired into the application.
+V0 defined placeholder interfaces (`AIProvider`, `ResumeParser`,
+`JobMatcher`, `CoverLetterGenerator`) in
+`app/services/integrations/ai_provider.py`. V0.2 makes the first two real:
+
+- `app/ai/provider.py`: `AIProvider.generate_structured(system, prompt,
+  schema)` returns a Pydantic-validated instance of `schema` or raises an
+  `AIError` subclass with a user-safe `code` and message.
+- `app/ai/providers/anthropic.py`: the only module that imports a vendor
+  SDK. `app/ai/factory.py` picks the provider from `AI_PROVIDER` and
+  degrades to a `DisabledAIProvider` when unconfigured.
+- `app/services/resume_intelligence/parser.py`: `ResumeParser` /
+  `AIResumeParser`, which depend only on `AIProvider`.
+
+`JobMatcher` and `CoverLetterGenerator` remain placeholders. Adding OpenAI,
+Google or a local LLM means one new `AIProvider` class.
 
 ## 5. Storage abstraction
 
 Resume files are never written directly to `backend/storage/...` from
 application code. Everything goes through `app/services/storage/base.py`'s
-`FileStorage` interface (`save`, `delete`, `exists`). V0 ships
+`FileStorage` interface (`save`, `read`, `delete`, `exists`). `read` was
+added in V0.2 so the original file can be re-analyzed. Nothing ever
+modifies a stored file. V0 ships
 `LocalFileStorage`, suitable for local development only. Switching to S3,
 GCS, Azure Blob, or Cloudflare R2 in a later version means writing one new
 class that implements `FileStorage` — no changes to `resume_service.py` or
@@ -74,8 +88,10 @@ The schema is normalized rather than storing lists as delimited strings:
   (`job_preference_job_titles`, `job_preference_locations`, etc.) rather
   than as comma-separated strings, so they can be queried and validated
   properly. Extended significantly in V0.1 — see §10.
-- `resumes` — upload/storage metadata only (`storage_reference`, MIME type,
-  size, status). No parsed content; V0 does not parse resumes.
+- `resumes` — upload/storage metadata (`storage_reference`, MIME type,
+  size, status). Since V0.2 it is also versioned (`version_number`) and
+  hashed (`file_hash`), and `status` tracks Resume Intelligence processing.
+  Parsed content lives in `resume_profiles` (see §12).
 - `jobs` — a normalized-job foundation table. Not populated by anything in
   V0; exists so `applications.job_id` has somewhere to point once job
   discovery (V0.3+) lands.
@@ -277,12 +293,76 @@ and `preferred_locations` back unchanged in its own `PUT` payload. A test
 in `PreferencesForm.test.tsx` specifically asserts this pass-through so a
 future refactor can't reintroduce the bug silently.
 
-## 11. Why no job matching, AI, or scraping yet
+## 11. Why no job matching or scraping yet
 
 These require external APIs, significant business logic, and product
-decisions (which providers, what scoring model, what automation risk is
-acceptable) that are out of scope for a foundation. Building the interfaces
+decisions (which job sources, what scoring model, what automation risk is
+acceptable) that are out of scope so far. V0.2 introduces AI only for
+resume extraction (§12). Building the interfaces
 now (`JobSource`, `AIProvider`, `ResumeParser`, `JobMatcher`,
 `CoverLetterGenerator`) without the implementations means V0.3–V0.9 can be
 built additively on top of this schema and these service boundaries,
 instead of requiring a redesign of the data model or API surface.
+
+## 12. V0.2 — Resume Intelligence
+
+Full documentation: [`resume-intelligence.md`](resume-intelligence.md).
+
+### 12.1 Pipeline
+
+```
+Resume file ─► extraction.py ─► parser.py ─► validation.py ─► processing_service.py ─► review_service.py
+ (unchanged)   PDF/DOCX → text   AIProvider     truth guard      persistence, statuses     accept/edit/reject
+               OCR_REQUIRED      ParsedResume   evidence check   reuse, reprocess          → confirm
+```
+
+`POST /resumes/{id}/process` does the cheap synchronous checks (ownership,
+concurrency guard, file-hash reuse) and queues the pipeline as a FastAPI
+background task with its own DB session. The frontend polls
+`GET /resumes/{id}/profile`. No queue infrastructure (Redis/Celery) was
+introduced. The background task is a single function, so moving it to a
+worker later only changes how it is scheduled.
+
+### 12.2 Data model
+
+- `resume_profiles` holds one row per processing attempt. It records
+  provenance (`parser_version`, `source_file_hash`, `ai_provider`,
+  `ai_model`), the extracted text, two JSONB documents (`raw_data`, the
+  validated parser output that is never edited, and `reviewed_data`, which
+  carries the user's per-item decisions), truth-guard `warnings`, and
+  user-safe `error_code`/`error_message` for failures. Statuses:
+  `processing | needs_review | confirmed | superseded | failed | ocr_required`.
+- `resumes.status` uses the new `resume_processing_status` enum
+  (`uploaded → extracting → extracted → parsing → parsed → needs_review →
+  confirmed`, or `failed` / `ocr_required`). The migration converts the V0
+  `resume_status` type with an explicit `USING` mapping and drops it, rather
+  than reusing its name with different values (see the V0/V0.1 enum notes in
+  §6 and §10).
+- Uploads create new versions instead of deleting old ones, so the model
+  supports "Resume 1 — Original, Resume 2 — Updated, …" and future tailored
+  versions.
+
+JSONB was chosen over one table per entity because a Resume Profile is a
+versioned, document-shaped snapshot of one parser run, with nested evidence.
+Pydantic validates it on every read and write, and its schema will change
+with parser versions. If matching later needs relational queries, the
+confirmed profile can be projected into tables then.
+
+### 12.3 Two profiles, never merged
+
+```
+User Profile (V0.1)          what the user tells JobPilot      user_profiles, professional_profiles, skills, ...
+Resume Profile (V0.2)        what the resume says              resume_profiles (confirmed)
+```
+
+Resume analysis never writes to V0.1 tables. `conflicts.py` compares the
+two on read (name, email, phone, location, LinkedIn, current title, years of
+experience) and reports both values with `potential_conflict: true`.
+
+### 12.4 Trust boundary
+
+AI output is untrusted until two things have happened. First, the
+deterministic truth guard has checked it against the resume text. Second,
+the user has reviewed every item and confirmed. Only a `confirmed` profile
+counts as the trusted Resume Profile for future features.
+

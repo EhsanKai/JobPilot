@@ -27,11 +27,7 @@ export default function ResumePage() {
           <ResumeAnalysis key={resume.id} resume={resume} />
         </Card>
       )}
-      {resume && (
-        <Card className="mt-6">
-          <ResumeVersions currentResumeId={resume.id} />
-        </Card>
-      )}
+      {resume && <ResumeVersions currentResumeId={resume.id} />}
     </AppShell>
   );
 }

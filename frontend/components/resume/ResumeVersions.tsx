@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { Card } from "@/components/ui/Card";
 import { listResumes } from "@/lib/api/resumes";
 import type { Resume } from "@/types/resume";
 
@@ -38,7 +39,7 @@ export function ResumeVersions({ currentResumeId }: { currentResumeId: string | 
   if (versions.length === 0) return null;
 
   return (
-    <div>
+    <Card className="mt-6">
       <h2 className="text-sm font-semibold text-slate-700">Previous versions</h2>
       <ul className="mt-2 divide-y divide-slate-100 text-sm">
         {versions.map((resume) => (
@@ -50,6 +51,6 @@ export function ResumeVersions({ currentResumeId }: { currentResumeId: string | 
           </li>
         ))}
       </ul>
-    </div>
+    </Card>
   );
 }
