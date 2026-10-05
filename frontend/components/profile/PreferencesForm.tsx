@@ -1,60 +1,39 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 
-import { getPreferences, updatePreferences } from "@/lib/api/preferences";
+import { updatePreferences } from "@/lib/api/preferences";
 import { ApiError } from "@/lib/http";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import type { JobPreferences } from "@/types/preferences";
+import type { DealBreakerType, JobPreferences } from "@/types/preferences";
 
-type FormState = {
-  desired_job_titles: string;
-  preferred_locations: string;
-  employment_types: string;
-  industries: string;
-  languages: string;
-  minimum_salary: string;
-  desired_salary: string;
-  salary_currency: string;
-  seniority: string;
-  remote_preference: string;
-  relocation_willingness: boolean;
-  travel_willingness: string;
-};
-
-const emptyForm: FormState = {
-  desired_job_titles: "",
-  preferred_locations: "",
-  employment_types: "",
-  industries: "",
-  languages: "",
-  minimum_salary: "",
-  desired_salary: "",
-  salary_currency: "",
-  seniority: "",
-  remote_preference: "",
-  relocation_willingness: false,
-  travel_willingness: "",
-};
-
-function toFormState(data: JobPreferences): FormState {
-  return {
-    desired_job_titles: data.desired_job_titles.join(", "),
-    preferred_locations: data.preferred_locations.join(", "),
-    employment_types: data.employment_types.join(", "),
-    industries: data.industries.join(", "),
-    languages: data.languages.map((l) => l.language).join(", "),
-    minimum_salary: data.minimum_salary?.toString() ?? "",
-    desired_salary: data.desired_salary?.toString() ?? "",
-    salary_currency: data.salary_currency ?? "",
-    seniority: data.seniority ?? "",
-    remote_preference: data.remote_preference ?? "",
-    relocation_willingness: data.relocation_willingness,
-    travel_willingness: data.travel_willingness ?? "",
-  };
+interface PreferencesFormProps {
+  preferences: JobPreferences;
+  onSaved: (updated: JobPreferences) => void;
 }
+
+const EMPLOYMENT_TYPES: JobPreferences["employment_types"] = [
+  "full_time",
+  "part_time",
+  "contract",
+  "temporary",
+  "internship",
+  "working_student",
+  "freelance",
+];
+
+const WORK_MODELS: JobPreferences["work_models"] = ["remote", "hybrid", "onsite", "flexible"];
+
+const DEAL_BREAKERS: { type: DealBreakerType; label: string }[] = [
+  { type: "minimum_salary", label: "Salary below minimum" },
+  { type: "remote_requirement", label: "Fully on-site" },
+  { type: "relocation", label: "Required relocation" },
+  { type: "travel", label: "Frequent travel" },
+  { type: "employment_type", label: "Specific employment types" },
+  { type: "location", label: "Outside preferred locations" },
+];
 
 function splitList(value: string): string[] {
   return value
@@ -63,34 +42,43 @@ function splitList(value: string): string[] {
     .filter(Boolean);
 }
 
-export function PreferencesForm() {
-  const [form, setForm] = useState<FormState>(emptyForm);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
+function dealBreakerState(preferences: JobPreferences): Record<DealBreakerType, boolean> {
+  const state = {} as Record<DealBreakerType, boolean>;
+  for (const { type } of DEAL_BREAKERS) {
+    state[type] = preferences.deal_breakers.some((db) => db.type === type && db.enabled);
+  }
+  return state;
+}
+
+export function PreferencesForm({ preferences, onSaved }: PreferencesFormProps) {
+  const [employmentTypes, setEmploymentTypes] = useState<Set<string>>(
+    new Set(preferences.employment_types)
+  );
+  const [workModels, setWorkModels] = useState<Set<string>>(new Set(preferences.work_models));
+  const [preferredIndustries, setPreferredIndustries] = useState(
+    preferences.preferred_industries.join(", ")
+  );
+  const [minimumSalary, setMinimumSalary] = useState(preferences.minimum_salary?.toString() ?? "");
+  const [desiredSalary, setDesiredSalary] = useState(preferences.desired_salary?.toString() ?? "");
+  const [salaryCurrency, setSalaryCurrency] = useState(preferences.salary_currency ?? "");
+  const [relocation, setRelocation] = useState(preferences.relocation ?? "");
+  const [travelWillingness, setTravelWillingness] = useState(preferences.travel_willingness ?? "");
+  const [dealBreakers, setDealBreakers] = useState<Record<DealBreakerType, boolean>>(
+    dealBreakerState(preferences)
+  );
+
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    let isMounted = true;
-    getPreferences()
-      .then((data) => {
-        if (isMounted) setForm(toFormState(data));
-      })
-      .catch((err) => {
-        if (isMounted) {
-          setError(err instanceof ApiError ? err.message : "Unable to load your preferences.");
-        }
-      })
-      .finally(() => {
-        if (isMounted) setIsLoading(false);
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+  function toggleInSet(set: Set<string>, setSet: (next: Set<string>) => void, value: string) {
+    const next = new Set(set);
+    if (next.has(value)) {
+      next.delete(value);
+    } else {
+      next.add(value);
+    }
+    setSet(next);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -101,20 +89,28 @@ export function PreferencesForm() {
 
     try {
       const updated = await updatePreferences({
-        desired_job_titles: splitList(form.desired_job_titles),
-        preferred_locations: splitList(form.preferred_locations),
-        employment_types: splitList(form.employment_types) as JobPreferences["employment_types"],
-        industries: splitList(form.industries),
-        languages: splitList(form.languages).map((language) => ({ language, proficiency: null })),
-        minimum_salary: form.minimum_salary ? Number(form.minimum_salary) : null,
-        desired_salary: form.desired_salary ? Number(form.desired_salary) : null,
-        salary_currency: form.salary_currency || null,
-        seniority: (form.seniority || null) as JobPreferences["seniority"],
-        remote_preference: (form.remote_preference || null) as JobPreferences["remote_preference"],
-        relocation_willingness: form.relocation_willingness,
-        travel_willingness: (form.travel_willingness || null) as JobPreferences["travel_willingness"],
+        // Desired job titles and preferred locations are managed by their
+        // own sections via dedicated endpoints; passed through unchanged
+        // here so this save doesn't wipe them out.
+        desired_job_titles: preferences.desired_job_titles.map((jt) => ({
+          title: jt.title,
+          priority: jt.priority,
+        })),
+        preferred_locations: preferences.preferred_locations.map((loc) => ({
+          location: loc.location,
+          radius_km: loc.radius_km,
+        })),
+        employment_types: Array.from(employmentTypes) as JobPreferences["employment_types"],
+        preferred_industries: splitList(preferredIndustries),
+        work_models: Array.from(workModels) as JobPreferences["work_models"],
+        minimum_salary: minimumSalary ? Number(minimumSalary) : null,
+        desired_salary: desiredSalary ? Number(desiredSalary) : null,
+        salary_currency: salaryCurrency || null,
+        relocation: (relocation || null) as JobPreferences["relocation"],
+        travel_willingness: (travelWillingness || null) as JobPreferences["travel_willingness"],
+        deal_breakers: DEAL_BREAKERS.map(({ type }) => ({ type, enabled: dealBreakers[type] })),
       });
-      setForm(toFormState(updated));
+      onSaved(updated);
       setSuccessMessage("Preferences saved successfully.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to save your preferences.");
@@ -123,146 +119,159 @@ export function PreferencesForm() {
     }
   }
 
-  if (isLoading) {
-    return <p className="text-sm text-slate-500">Loading your preferences...</p>;
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-6" noValidate>
       {error && <Alert variant="error">{error}</Alert>}
       {successMessage && <Alert variant="success">{successMessage}</Alert>}
 
-      <Input
-        label="Desired job titles (comma separated)"
-        name="desired_job_titles"
-        value={form.desired_job_titles}
-        onChange={(e) => updateField("desired_job_titles", e.target.value)}
-        placeholder="Backend Engineer, Platform Engineer"
-      />
-      <Input
-        label="Preferred locations (comma separated)"
-        name="preferred_locations"
-        value={form.preferred_locations}
-        onChange={(e) => updateField("preferred_locations", e.target.value)}
-        placeholder="Berlin, Remote"
-      />
-      <Input
-        label="Employment types (comma separated)"
-        name="employment_types"
-        value={form.employment_types}
-        onChange={(e) => updateField("employment_types", e.target.value)}
-        placeholder="full_time, contract"
-      />
-      <Input
-        label="Industries (comma separated)"
-        name="industries"
-        value={form.industries}
-        onChange={(e) => updateField("industries", e.target.value)}
-        placeholder="Software, Fintech"
-      />
-      <Input
-        label="Languages (comma separated)"
-        name="languages"
-        value={form.languages}
-        onChange={(e) => updateField("languages", e.target.value)}
-        placeholder="English, German"
-      />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Input
-          label="Minimum salary"
-          name="minimum_salary"
-          type="number"
-          min={0}
-          value={form.minimum_salary}
-          onChange={(e) => updateField("minimum_salary", e.target.value)}
-        />
-        <Input
-          label="Desired salary"
-          name="desired_salary"
-          type="number"
-          min={0}
-          value={form.desired_salary}
-          onChange={(e) => updateField("desired_salary", e.target.value)}
-        />
-        <Input
-          label="Salary currency"
-          name="salary_currency"
-          maxLength={3}
-          value={form.salary_currency}
-          onChange={(e) => updateField("salary_currency", e.target.value.toUpperCase())}
-          placeholder="EUR"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="flex flex-col gap-1">
-          <label htmlFor="seniority" className="text-sm font-medium text-slate-700">
-            Seniority
-          </label>
-          <select
-            id="seniority"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500"
-            value={form.seniority}
-            onChange={(e) => updateField("seniority", e.target.value)}
-          >
-            <option value="">Not specified</option>
-            {["intern", "junior", "mid", "senior", "lead", "principal", "executive"].map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+      <section className="flex flex-col gap-3">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Salary</h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Input
+            label="Minimum salary"
+            name="minimum_salary"
+            type="number"
+            min={0}
+            value={minimumSalary}
+            onChange={(e) => setMinimumSalary(e.target.value)}
+          />
+          <Input
+            label="Desired salary"
+            name="desired_salary"
+            type="number"
+            min={0}
+            value={desiredSalary}
+            onChange={(e) => setDesiredSalary(e.target.value)}
+          />
+          <Input
+            label="Currency"
+            name="salary_currency"
+            maxLength={3}
+            value={salaryCurrency}
+            onChange={(e) => setSalaryCurrency(e.target.value.toUpperCase())}
+            placeholder="EUR"
+          />
         </div>
+        <p className="text-xs text-slate-400">
+          Stored as annual gross salary. Desired salary must be at least the minimum.
+        </p>
+      </section>
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="remote_preference" className="text-sm font-medium text-slate-700">
-            Remote preference
-          </label>
-          <select
-            id="remote_preference"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500"
-            value={form.remote_preference}
-            onChange={(e) => updateField("remote_preference", e.target.value)}
-          >
-            <option value="">Not specified</option>
-            {["onsite", "remote", "hybrid", "flexible"].map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+      <section className="flex flex-col gap-3 border-t border-slate-200 pt-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Work model
+        </h3>
+        <div className="flex flex-wrap gap-4">
+          {WORK_MODELS.map((model) => (
+            <label key={model} className="flex items-center gap-2 text-sm capitalize text-slate-700">
+              <input
+                type="checkbox"
+                checked={workModels.has(model)}
+                onChange={() => toggleInSet(workModels, setWorkModels, model)}
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              />
+              {model}
+            </label>
+          ))}
         </div>
+      </section>
 
-        <div className="flex flex-col gap-1">
-          <label htmlFor="travel_willingness" className="text-sm font-medium text-slate-700">
-            Travel willingness
-          </label>
-          <select
-            id="travel_willingness"
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-brand-500"
-            value={form.travel_willingness}
-            onChange={(e) => updateField("travel_willingness", e.target.value)}
-          >
-            <option value="">Not specified</option>
-            {["none", "occasional", "frequent"].map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+      <section className="flex flex-col gap-3 border-t border-slate-200 pt-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Employment type
+        </h3>
+        <div className="flex flex-wrap gap-4">
+          {EMPLOYMENT_TYPES.map((type) => (
+            <label key={type} className="flex items-center gap-2 text-sm capitalize text-slate-700">
+              <input
+                type="checkbox"
+                checked={employmentTypes.has(type)}
+                onChange={() => toggleInSet(employmentTypes, setEmploymentTypes, type)}
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              />
+              {type.replace("_", " ")}
+            </label>
+          ))}
         </div>
-      </div>
+      </section>
 
-      <label className="flex items-center gap-2 text-sm text-slate-700">
-        <input
-          type="checkbox"
-          checked={form.relocation_willingness}
-          onChange={(e) => updateField("relocation_willingness", e.target.checked)}
-          className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+      <section className="flex flex-col gap-3 border-t border-slate-200 pt-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Preferred industries
+        </h3>
+        <Input
+          label="Industries (comma separated)"
+          name="preferred_industries"
+          value={preferredIndustries}
+          onChange={(e) => setPreferredIndustries(e.target.value)}
+          placeholder="Software, Fintech"
         />
-        Willing to relocate
-      </label>
+      </section>
+
+      <section className="flex flex-col gap-3 border-t border-slate-200 pt-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Relocation &amp; travel
+        </h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="relocation" className="text-sm font-medium text-slate-700">
+              Willing to relocate
+            </label>
+            <select
+              id="relocation"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              value={relocation}
+              onChange={(e) => setRelocation(e.target.value as typeof relocation)}
+            >
+              <option value="">Not specified</option>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+              <option value="maybe">Maybe</option>
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="travel_willingness" className="text-sm font-medium text-slate-700">
+              Willingness to travel
+            </label>
+            <select
+              id="travel_willingness"
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900"
+              value={travelWillingness}
+              onChange={(e) => setTravelWillingness(e.target.value as typeof travelWillingness)}
+            >
+              <option value="">Not specified</option>
+              <option value="none">No travel</option>
+              <option value="occasional">Occasional travel</option>
+              <option value="frequent">Frequent travel</option>
+              <option value="flexible">Flexible</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3 border-t border-slate-200 pt-6">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+          Deal breakers
+        </h3>
+        <p className="text-xs text-slate-400">
+          These don&apos;t affect anything yet &mdash; future versions will use them for matching.
+        </p>
+        <div className="flex flex-col gap-2">
+          {DEAL_BREAKERS.map(({ type, label }) => (
+            <label key={type} className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={dealBreakers[type]}
+                onChange={() =>
+                  setDealBreakers((prev) => ({ ...prev, [type]: !prev[type] }))
+                }
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </section>
 
       <Button type="submit" isLoading={isSaving} className="w-fit">
         {isSaving ? "Saving..." : "Save preferences"}

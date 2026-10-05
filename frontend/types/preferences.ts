@@ -4,46 +4,88 @@ export type EmploymentType =
   | "contract"
   | "internship"
   | "temporary"
-  | "freelance";
-
-export type SeniorityLevel =
-  | "intern"
-  | "junior"
-  | "mid"
-  | "senior"
-  | "lead"
-  | "principal"
-  | "executive";
+  | "freelance"
+  | "working_student";
 
 export type RemotePreference = "onsite" | "remote" | "hybrid" | "flexible";
 
-export type TravelWillingness = "none" | "occasional" | "frequent";
+export type TravelWillingness = "none" | "occasional" | "frequent" | "flexible";
 
-export interface LanguagePreference {
-  language: string;
-  proficiency: string | null;
+export type RelocationPreference = "yes" | "no" | "maybe";
+
+export type JobTitlePriority = "primary" | "secondary";
+
+export type DealBreakerType =
+  | "minimum_salary"
+  | "remote_requirement"
+  | "employment_type"
+  | "location"
+  | "relocation"
+  | "travel";
+
+export interface DesiredJobTitle {
+  id: string;
+  title: string;
+  priority: JobTitlePriority;
+}
+
+export interface DesiredJobTitleInput {
+  title: string;
+  priority?: JobTitlePriority;
+}
+
+export interface PreferredLocation {
+  id: string;
+  location: string;
+  radius_km: number | null;
+}
+
+export interface PreferredLocationInput {
+  location: string;
+  radius_km?: number | null;
+}
+
+export interface DealBreaker {
+  id: string;
+  type: DealBreakerType;
+  value: string | null;
+  enabled: boolean;
+}
+
+export interface DealBreakerInput {
+  type: DealBreakerType;
+  value?: string | null;
+  enabled?: boolean;
 }
 
 export interface JobPreferences {
   id: string;
   user_id: string;
-  desired_job_titles: string[];
-  preferred_locations: string[];
+  desired_job_titles: DesiredJobTitle[];
+  preferred_locations: PreferredLocation[];
   employment_types: EmploymentType[];
-  industries: string[];
-  languages: LanguagePreference[];
+  preferred_industries: string[];
+  work_models: RemotePreference[];
   minimum_salary: number | null;
   desired_salary: number | null;
   salary_currency: string | null;
-  seniority: SeniorityLevel | null;
-  remote_preference: RemotePreference | null;
-  relocation_willingness: boolean;
+  relocation: RelocationPreference | null;
   travel_willingness: TravelWillingness | null;
+  deal_breakers: DealBreaker[];
   created_at: string;
   updated_at: string;
 }
 
-export type JobPreferencesInput = Omit<
-  JobPreferences,
-  "id" | "user_id" | "created_at" | "updated_at"
->;
+export interface JobPreferencesInput {
+  desired_job_titles?: DesiredJobTitleInput[];
+  preferred_locations?: PreferredLocationInput[];
+  employment_types?: EmploymentType[];
+  preferred_industries?: string[];
+  work_models?: RemotePreference[];
+  minimum_salary?: number | null;
+  desired_salary?: number | null;
+  salary_currency?: string | null;
+  relocation?: RelocationPreference | null;
+  travel_willingness?: TravelWillingness | null;
+  deal_breakers?: DealBreakerInput[];
+}

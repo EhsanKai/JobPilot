@@ -1,21 +1,28 @@
-export interface UserProfile {
-  id: string;
-  user_id: string;
-  phone: string | null;
-  location: string | null;
-  linkedin_url: string | null;
-  current_position: string | null;
-  years_of_experience: number | null;
-  created_at: string;
-  updated_at: string;
-}
+export type SeniorityLevel =
+  | "intern"
+  | "junior"
+  | "mid"
+  | "senior"
+  | "lead"
+  | "manager"
+  | "director";
 
 export interface ProfileWithUser {
   id: string;
   email: string;
   first_name: string;
   last_name: string;
-  profile: UserProfile | null;
+
+  // Personal profile
+  phone: string | null;
+  location: string | null;
+  linkedin_url: string | null;
+
+  // Professional profile
+  current_job_title: string | null;
+  years_of_experience: number | null;
+  seniority_level: SeniorityLevel | null;
+  industries: string[];
 }
 
 export interface ProfileUpdateInput {
@@ -24,6 +31,8 @@ export interface ProfileUpdateInput {
   phone?: string | null;
   location?: string | null;
   linkedin_url?: string | null;
-  current_position?: string | null;
+  current_job_title?: string | null;
   years_of_experience?: number | null;
+  seniority_level?: SeniorityLevel | null;
+  industries?: string[];
 }

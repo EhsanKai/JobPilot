@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 
 
 class UserProfile(Base, TimestampMixin):
+    """The user's personal contact information.
+
+    Professional background (job title, experience, seniority) lives in
+    `ProfessionalProfile` instead -- see that model for why they're split.
+    """
+
     __tablename__ = "user_profiles"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -24,7 +30,5 @@ class UserProfile(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    current_position: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    years_of_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="profile")

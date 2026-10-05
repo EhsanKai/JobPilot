@@ -1,7 +1,8 @@
-# JobPilot Architecture — V0
+# JobPilot Architecture — V0 & V0.1
 
 This document captures the architectural decisions behind the V0 foundation
-and how later versions are expected to build on it without a rewrite.
+and the V0.1 structured Job Search Profile, and how later versions are
+expected to build on both without a rewrite.
 
 ## 1. Layered, modular pipeline
 
@@ -60,21 +61,19 @@ GCS, Azure Blob, or Cloudflare R2 in a later version means writing one new
 class that implements `FileStorage` — no changes to `resume_service.py` or
 the API layer.
 
-## 6. Database schema
+## 6. Database schema (V0)
 
 The schema is normalized rather than storing lists as delimited strings:
 
 - `users` — account + credentials.
-- `user_profiles` — one-to-one with `users`; contact and career info. Kept
-  separate from `users` so account fields (auth-related) and profile fields
-  (editable career info) can evolve independently.
-- `job_preferences` — one-to-one with `users` for scalar preferences
-  (salary range, seniority, remote preference, relocation/travel
-  willingness). List-like preferences (desired job titles, preferred
-  locations, employment types, industries, languages) live in their own
-  child tables (`job_preference_job_titles`, `job_preference_locations`,
-  etc.) rather than as comma-separated strings, so they can be queried and
-  validated properly.
+- `user_profiles` — one-to-one with `users`; personal contact info only
+  (phone, location, LinkedIn URL) as of V0.1 — see §10 for why career fields
+  moved out of this table.
+- `job_preferences` — one-to-one with `users` for scalar preferences.
+  List-like preferences live in their own child tables
+  (`job_preference_job_titles`, `job_preference_locations`, etc.) rather
+  than as comma-separated strings, so they can be queried and validated
+  properly. Extended significantly in V0.1 — see §10.
 - `resumes` — upload/storage metadata only (`storage_reference`, MIME type,
   size, status). No parsed content; V0 does not parse resumes.
 - `jobs` — a normalized-job foundation table. Not populated by anything in
@@ -84,8 +83,9 @@ The schema is normalized rather than storing lists as delimited strings:
   (status, salary expectation, start date). No document generation or
   submission logic exists yet.
 
-Migrations are managed with Alembic (`backend/alembic/`); the initial
-migration creates this full V0 schema.
+Migrations are managed with Alembic (`backend/alembic/`). The initial
+migration creates the V0 schema; a second migration adds the V0.1 entities
+described in §10.
 
 ## 7. Authentication
 
@@ -117,13 +117,18 @@ never leak a stack trace to the client.
   components and wrap authenticated routes in `AppShell`.
 - `components/` — grouped by domain (`auth/`, `profile/`, `resume/`,
   `dashboard/`) plus a small `ui/` kit (`Button`, `Input`, `Card`, `Alert`)
-  so loading/error/success states look consistent everywhere.
+  so loading/error/success states look consistent everywhere. `profile/`
+  holds one component per Job Search Profile section (`ProfileForm`,
+  `SkillsManager`, `LanguagesManager`, `DesiredRolesManager`,
+  `LocationsManager`, `PreferencesForm`, `ProfileCompleteness`) rather than
+  one large form, per §10.
 - `lib/http.ts` — a single typed `fetch` wrapper (`api.get/post/put/delete`)
   that attaches the JWT, parses the backend's error envelope into an
   `ApiError`, and is the only place that knows about `NEXT_PUBLIC_API_URL`.
 - `lib/api/*` — one typed module per backend domain (`auth.ts`,
-  `profile.ts`, `preferences.ts`, `resumes.ts`, `users.ts`), so components
-  never construct fetch calls or URLs themselves.
+  `profile.ts`, `preferences.ts`, `resumes.ts`, `users.ts`, `skills.ts`,
+  `languages.ts`, `completeness.ts`), so components never construct fetch
+  calls or URLs themselves.
 - `types/*` — TypeScript interfaces mirroring the backend's Pydantic
   schemas, kept in sync by hand in V0 (a generated client is a reasonable
   future improvement, not required for the foundation).
@@ -131,7 +136,148 @@ never leak a stack trace to the client.
 Every form/upload component manages explicit loading, success, error, and
 empty states rather than leaving the user guessing whether an action worked.
 
-## 10. Why no job matching, AI, or scraping yet
+## 10. V0.1 — User Profile & Job Preference Intelligence
+
+V0.1's goal is a structured **Job Search Profile**: enough normalized data
+for a future Matching Engine to query directly, without implementing any
+matching, parsing, or AI itself. It builds on V0's `user_profiles` and
+`job_preferences` rather than replacing them.
+
+### 10.1 The five-way split
+
+```
+User
+├── Personal Profile       (user_profiles)       phone, location, LinkedIn
+├── Professional Profile   (professional_profiles) job title, experience, seniority, industries worked in
+├── Skills                 (skills + user_skills)  catalog + per-user proficiency
+├── Languages               (languages + user_languages) catalog + per-user proficiency
+└── Job Preferences        (job_preferences + children)
+    ├── Desired Roles       job_preference_job_titles (+ priority)
+    ├── Locations            job_preference_locations (+ radius_km placeholder)
+    ├── Employment Types     job_preference_employment_types
+    ├── Preferred Industries job_preference_industries
+    ├── Salary               job_preferences.minimum_salary / desired_salary / salary_currency
+    ├── Work Model           job_preference_work_models (multi-select)
+    ├── Relocation            job_preferences.relocation (yes/no/maybe)
+    ├── Travel                job_preferences.travel_willingness
+    └── Deal Breakers         deal_breakers
+```
+
+Two reclassifications from V0, each for a concrete reason rather than a
+cosmetic rename:
+
+- **Seniority and career fields moved out of `user_profiles` into a new
+  `professional_profiles` table.** V0.1's own architecture puts "Seniority
+  level" under Professional Profile, not Personal Profile or Job
+  Preferences — keeping personal contact info and professional background
+  as separate one-to-one tables lets them be edited, and eventually sourced
+  (e.g. from a parsed resume in V0.2), independently.
+- **Spoken languages moved out of `job_preferences` into top-level
+  `languages` / `user_languages` catalog tables.** A language the user
+  speaks (e.g. "German — native") is a fact about the person, not a
+  preference about a future job, and V0.1's own profile diagram lists
+  Languages as a sibling of Job Preferences rather than nested under it.
+
+Two new concepts reuse the existing child-table pattern rather than
+inventing a new one:
+
+- **Work model became multi-select.** V0's `job_preferences.remote_preference`
+  was a single enum column. V0.1 explicitly requires combinations like
+  "Hybrid + Remote", so it's now `job_preference_work_models`, structured
+  exactly like `job_preference_employment_types` (one row per selected
+  value) instead of a single column.
+- **Relocation became a three-state enum.** `relocation_willingness: bool`
+  couldn't represent "maybe" — a real, common answer — so it's now
+  `job_preferences.relocation: yes | no | maybe`.
+
+### 10.2 Skills, languages, and industries: catalog + link tables
+
+Skills (`skills` + `user_skills`) and spoken languages (`languages` +
+`user_languages`) both follow the same shape: a shared catalog table (just
+a `name`) plus a per-user link table carrying the user-specific attributes
+(proficiency, years of experience). Industries follow it too, but **twice**,
+for two different concepts that are easy to conflate:
+
+- `industries` + `user_industries` — industries the user has **worked in**
+  (a Professional Profile fact, queried directly by `user_id`).
+- `job_preference_industries` — industries the user **wants to work in**
+  (a Job Preference, kept as the free-text child table it already was in
+  V0, just renamed to `preferred_industries` in the API for clarity).
+
+The catalog pattern means "Python" or "German" is stored once and reused
+across users, while each user's own proficiency/experience lives in the
+link row. Adding the same skill or language twice updates the existing row
+instead of duplicating it (skills); adding a language the user already has
+is rejected with `409 Conflict` rather than silently duplicating it.
+
+### 10.3 Salary model
+
+`minimum_salary` and `desired_salary` are `NUMERIC(12,2)` — structured
+annual gross salary, never a formatted string like `"€60k-€68k"`. A
+`model_validator` on `JobPreferencesUpdate` rejects `desired_salary <
+minimum_salary` with a specific, user-facing message (surfaced by the
+frontend's error handling, not a generic "invalid input"). The same
+`salary_currency` / `minimum_salary` / `desired_salary` shape is intended to
+generalize to a future `jobs.salary_min` / `salary_max` / `salary_currency`
+/ `salary_period` once job postings exist (V0.3+), so the Matching Engine
+can compare like with like.
+
+### 10.4 Deal breakers
+
+`deal_breakers` is a flexible table (`user_id`, `type`, `value`, `enabled`)
+rather than dedicated boolean columns, because the Matching Engine (V0.5+)
+will need to grow new deal-breaker types without another migration. `type`
+is a closed enum (`minimum_salary`, `remote_requirement`, `employment_type`,
+`location`, `relocation`, `travel`) with a `UNIQUE (user_id, type)`
+constraint — one row per deal-breaker kind per user, matching the fixed
+checklist UI in `PreferencesForm`. `value` is an optional free-form payload
+for deal-breaker types that need one in the future (e.g. a specific
+employment type to exclude); V0.1 doesn't populate it. No matching logic
+reads this table yet.
+
+### 10.5 Profile completeness
+
+`app/services/completeness_service.py` computes a 0-100% score from eight
+equally-weighted categories (12.5% each), so a change to the weighting is a
+one-line, deliberate edit rather than an accident of field count:
+
+| Category                 | Full credit when...                                   |
+| ------------------------- | ------------------------------------------------------ |
+| Personal information      | fraction of {phone, location, LinkedIn} filled         |
+| Professional information   | fraction of {job title, years of experience, seniority} filled |
+| Skills                     | at least one skill added                               |
+| Languages                  | at least one language added                            |
+| Job titles                 | at least one desired job title added                   |
+| Locations                  | at least one preferred location added                   |
+| Salary                      | both minimum and desired salary set (half credit for one) |
+| Work model                 | at least one work model selected                        |
+
+This is the single source of truth: both the dashboard and the profile page
+render the same `GET /profile/completeness` response via one
+`<ProfileCompleteness />` component, rather than each computing their own
+approximation.
+
+### 10.6 Full-replace endpoints and the pass-through problem
+
+`PUT /profile` and `PUT /preferences` replace every field they cover in a
+single transaction — the same convention V0 already used for preference
+lists. V0.1 adds dedicated add/delete endpoints for desired job titles and
+preferred locations (`/preferences/job-titles`, `/preferences/locations`),
+which creates a real hazard: if the frontend's bulk preferences form (salary,
+work model, employment type, deal breakers) submitted without those two
+lists, `PUT /preferences` would silently wipe them out, since the schema
+defaults omitted list fields to empty.
+
+The fix lives entirely in the frontend: `app/profile/preferences/page.tsx`
+holds one `preferences` object fetched once and shared by all three
+sections. `DesiredRolesManager` and `LocationsManager` mutate it via their
+own granular endpoints and lift the result back up through an `onChange`
+callback; `PreferencesForm` always echoes the current `desired_job_titles`
+and `preferred_locations` back unchanged in its own `PUT` payload. A test
+in `PreferencesForm.test.tsx` specifically asserts this pass-through so a
+future refactor can't reintroduce the bug silently.
+
+## 11. Why no job matching, AI, or scraping yet
 
 These require external APIs, significant business logic, and product
 decisions (which providers, what scoring model, what automation risk is

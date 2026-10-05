@@ -1,13 +1,14 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.deal_breaker import DealBreaker
 from app.models.job_preferences import (
     JobPreferenceEmploymentType,
     JobPreferenceIndustry,
     JobPreferenceJobTitle,
-    JobPreferenceLanguage,
     JobPreferenceLocation,
     JobPreferences,
+    JobPreferenceWorkModel,
 )
 from app.models.user import User
 from app.schemas.preferences import JobPreferencesUpdate
@@ -17,7 +18,7 @@ _LOAD_OPTIONS = (
     selectinload(JobPreferences.locations),
     selectinload(JobPreferences.employment_types),
     selectinload(JobPreferences.industries),
-    selectinload(JobPreferences.languages),
+    selectinload(JobPreferences.work_models),
 )
 
 
@@ -33,6 +34,12 @@ def get_or_create_preferences(db: Session, user: User) -> JobPreferences:
     return preferences
 
 
+def get_deal_breakers(db: Session, user: User) -> list[DealBreaker]:
+    return list(
+        db.execute(select(DealBreaker).where(DealBreaker.user_id == user.id)).scalars().all()
+    )
+
+
 def update_preferences(db: Session, user: User, data: JobPreferencesUpdate) -> JobPreferences:
     preferences = get_or_create_preferences(db, user)
 
@@ -40,9 +47,7 @@ def update_preferences(db: Session, user: User, data: JobPreferencesUpdate) -> J
         "minimum_salary",
         "desired_salary",
         "salary_currency",
-        "seniority",
-        "remote_preference",
-        "relocation_willingness",
+        "relocation",
         "travel_willingness",
     }
     for field in scalar_fields:
@@ -50,12 +55,14 @@ def update_preferences(db: Session, user: User, data: JobPreferencesUpdate) -> J
 
     preferences.job_titles.clear()
     preferences.job_titles.extend(
-        JobPreferenceJobTitle(title=title) for title in data.desired_job_titles
+        JobPreferenceJobTitle(title=item.title, priority=item.priority)
+        for item in data.desired_job_titles
     )
 
     preferences.locations.clear()
     preferences.locations.extend(
-        JobPreferenceLocation(location=location) for location in data.preferred_locations
+        JobPreferenceLocation(location=item.location, radius_km=item.radius_km)
+        for item in data.preferred_locations
     )
 
     preferences.employment_types.clear()
@@ -66,14 +73,19 @@ def update_preferences(db: Session, user: User, data: JobPreferencesUpdate) -> J
 
     preferences.industries.clear()
     preferences.industries.extend(
-        JobPreferenceIndustry(industry=industry) for industry in data.industries
+        JobPreferenceIndustry(industry=industry) for industry in data.preferred_industries
     )
 
-    preferences.languages.clear()
-    preferences.languages.extend(
-        JobPreferenceLanguage(language=lang.language, proficiency=lang.proficiency)
-        for lang in data.languages
+    preferences.work_models.clear()
+    preferences.work_models.extend(
+        JobPreferenceWorkModel(work_model=work_model) for work_model in data.work_models
     )
+
+    for existing in get_deal_breakers(db, user):
+        db.delete(existing)
+    db.flush()
+    for item in data.deal_breakers:
+        db.add(DealBreaker(user_id=user.id, type=item.type, value=item.value, enabled=item.enabled))
 
     db.add(preferences)
     db.commit()

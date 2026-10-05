@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -76,11 +77,19 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def handle_validation_error(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        errors = exc.errors()
+        # Surface the first field error's own message (e.g. "desired_salary
+        # must be greater than or equal to minimum_salary") instead of a
+        # generic string, so the frontend can show the user something useful.
+        # Pydantic prefixes custom validator messages with "Value error, ".
+        message = (
+            errors[0]["msg"].removeprefix("Value error, ") if errors else "Invalid request data"
+        )
         return _error_response(
             "VALIDATION_ERROR",
-            "Invalid request data",
+            message,
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"errors": exc.errors()},
+            {"errors": jsonable_encoder(errors)},
         )
 
     @app.exception_handler(StarletteHTTPException)

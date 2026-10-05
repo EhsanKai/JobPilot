@@ -3,7 +3,7 @@ import uuid
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Numeric, String
+from sqlalchemy import Enum, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,17 +14,10 @@ if TYPE_CHECKING:
     from app.models.user import User
 
 
-class SeniorityLevel(str, enum.Enum):
-    INTERN = "intern"
-    JUNIOR = "junior"
-    MID = "mid"
-    SENIOR = "senior"
-    LEAD = "lead"
-    PRINCIPAL = "principal"
-    EXECUTIVE = "executive"
-
-
 class RemotePreference(str, enum.Enum):
+    """A single work-model option. A user may select several (see
+    `JobPreferenceWorkModel`) -- e.g. "Hybrid + Remote"."""
+
     ONSITE = "onsite"
     REMOTE = "remote"
     HYBRID = "hybrid"
@@ -35,6 +28,13 @@ class TravelWillingness(str, enum.Enum):
     NONE = "none"
     OCCASIONAL = "occasional"
     FREQUENT = "frequent"
+    FLEXIBLE = "flexible"
+
+
+class RelocationPreference(str, enum.Enum):
+    YES = "yes"
+    NO = "no"
+    MAYBE = "maybe"
 
 
 class EmploymentTypeValue(str, enum.Enum):
@@ -44,14 +44,22 @@ class EmploymentTypeValue(str, enum.Enum):
     INTERNSHIP = "internship"
     TEMPORARY = "temporary"
     FREELANCE = "freelance"
+    WORKING_STUDENT = "working_student"
+
+
+class JobTitlePriority(str, enum.Enum):
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
 
 
 class JobPreferences(Base, TimestampMixin):
     """Foundational job-preference record for a user.
 
-    List-like attributes (job titles, locations, employment types, industries,
-    languages) are normalized into their own child tables instead of being
-    stored as delimited strings.
+    List-like attributes (job titles, locations, employment types, preferred
+    industries, work models) are normalized into their own child tables
+    instead of being stored as delimited strings. Deal breakers also hang off
+    the user directly (see `DealBreaker`) since they describe Job Preferences
+    in the product's conceptual model but don't need a FK back to this table.
     """
 
     __tablename__ = "job_preferences"
@@ -65,13 +73,9 @@ class JobPreferences(Base, TimestampMixin):
     desired_salary: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     salary_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
 
-    seniority: Mapped[SeniorityLevel | None] = mapped_column(
-        Enum(SeniorityLevel, name="seniority_level"), nullable=True
+    relocation: Mapped[RelocationPreference | None] = mapped_column(
+        Enum(RelocationPreference, name="relocation_preference"), nullable=True
     )
-    remote_preference: Mapped[RemotePreference | None] = mapped_column(
-        Enum(RemotePreference, name="remote_preference"), nullable=True
-    )
-    relocation_willingness: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     travel_willingness: Mapped[TravelWillingness | None] = mapped_column(
         Enum(TravelWillingness, name="travel_willingness"), nullable=True
     )
@@ -89,7 +93,7 @@ class JobPreferences(Base, TimestampMixin):
     industries: Mapped[list["JobPreferenceIndustry"]] = relationship(
         back_populates="job_preferences", cascade="all, delete-orphan"
     )
-    languages: Mapped[list["JobPreferenceLanguage"]] = relationship(
+    work_models: Mapped[list["JobPreferenceWorkModel"]] = relationship(
         back_populates="job_preferences", cascade="all, delete-orphan"
     )
 
@@ -102,6 +106,11 @@ class JobPreferenceJobTitle(Base):
         UUID(as_uuid=True), ForeignKey("job_preferences.id", ondelete="CASCADE"), nullable=False
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    priority: Mapped[JobTitlePriority] = mapped_column(
+        Enum(JobTitlePriority, name="job_title_priority"),
+        default=JobTitlePriority.SECONDARY,
+        nullable=False,
+    )
 
     job_preferences: Mapped["JobPreferences"] = relationship(back_populates="job_titles")
 
@@ -114,6 +123,9 @@ class JobPreferenceLocation(Base):
         UUID(as_uuid=True), ForeignKey("job_preferences.id", ondelete="CASCADE"), nullable=False
     )
     location: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Not used for matching yet -- reserved so a future version can filter by
+    # distance without another migration.
+    radius_km: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     job_preferences: Mapped["JobPreferences"] = relationship(back_populates="locations")
 
@@ -133,6 +145,10 @@ class JobPreferenceEmploymentType(Base):
 
 
 class JobPreferenceIndustry(Base):
+    """An industry the user wants to work in. See `app.models.industry` for
+    the industries the user has already worked in (a professional-profile
+    attribute, not a preference)."""
+
     __tablename__ = "job_preference_industries"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -144,19 +160,18 @@ class JobPreferenceIndustry(Base):
     job_preferences: Mapped["JobPreferences"] = relationship(back_populates="industries")
 
 
-class JobPreferenceLanguage(Base):
-    __tablename__ = "job_preference_languages"
+class JobPreferenceWorkModel(Base):
+    __tablename__ = "job_preference_work_models"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_preferences_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_preferences.id", ondelete="CASCADE"), nullable=False
     )
-    language: Mapped[str] = mapped_column(String(100), nullable=False)
-    proficiency: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    work_model: Mapped[RemotePreference] = mapped_column(
+        Enum(RemotePreference, name="remote_preference"), nullable=False
+    )
 
-    job_preferences: Mapped["JobPreferences"] = relationship(back_populates="languages")
+    job_preferences: Mapped["JobPreferences"] = relationship(back_populates="work_models")
 
 
-# Backwards-friendly alias kept distinct from the per-row EmploymentTypeValue enum
-# so API schemas can import a single, clearly named enum.
 EmploymentType = EmploymentTypeValue

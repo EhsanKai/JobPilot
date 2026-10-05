@@ -16,17 +16,13 @@ const baseProfile = {
   email: "jane@example.com",
   first_name: "Jane",
   last_name: "Doe",
-  profile: {
-    id: "profile-1",
-    user_id: "user-1",
-    phone: null,
-    location: null,
-    linkedin_url: null,
-    current_position: null,
-    years_of_experience: null,
-    created_at: "2024-01-01T00:00:00Z",
-    updated_at: "2024-01-01T00:00:00Z",
-  },
+  phone: null,
+  location: null,
+  linkedin_url: null,
+  current_job_title: null,
+  years_of_experience: null,
+  seniority_level: null,
+  industries: [],
 };
 
 describe("ProfileForm", () => {
@@ -52,10 +48,7 @@ describe("ProfileForm", () => {
 
   it("saves changes and shows a success message", async () => {
     getProfileMock.mockResolvedValue(baseProfile);
-    updateProfileMock.mockResolvedValue({
-      ...baseProfile,
-      profile: { ...baseProfile.profile, location: "Berlin" },
-    });
+    updateProfileMock.mockResolvedValue({ ...baseProfile, location: "Berlin" });
 
     const user = userEvent.setup();
     render(<ProfileForm />);

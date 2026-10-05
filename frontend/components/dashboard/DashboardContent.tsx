@@ -3,11 +3,10 @@
 import { useEffect, useState } from "react";
 
 import { getPreferences } from "@/lib/api/preferences";
-import { getProfile } from "@/lib/api/profile";
 import { getCurrentResume } from "@/lib/api/resumes";
 import { Card } from "@/components/ui/Card";
+import { ProfileCompleteness } from "@/components/profile/ProfileCompleteness";
 import type { JobPreferences } from "@/types/preferences";
-import type { ProfileWithUser } from "@/types/profile";
 import type { Resume } from "@/types/resume";
 
 interface UpcomingFeature {
@@ -22,21 +21,6 @@ const UPCOMING_FEATURES: UpcomingFeature[] = [
   { title: "Application Tracking", version: "V0.12" },
 ];
 
-function computeProfileCompletion(profile: ProfileWithUser | null): number {
-  if (!profile) return 0;
-  const fields = [
-    profile.first_name,
-    profile.last_name,
-    profile.profile?.phone,
-    profile.profile?.location,
-    profile.profile?.current_position,
-    profile.profile?.years_of_experience != null ? "set" : null,
-    profile.profile?.linkedin_url,
-  ];
-  const filled = fields.filter(Boolean).length;
-  return Math.round((filled / fields.length) * 100);
-}
-
 function computePreferencesStatus(preferences: JobPreferences | null): string {
   if (!preferences) return "Not started";
   const hasAnything =
@@ -47,17 +31,15 @@ function computePreferencesStatus(preferences: JobPreferences | null): string {
 }
 
 export function DashboardContent({ firstName }: { firstName: string }) {
-  const [profile, setProfile] = useState<ProfileWithUser | null>(null);
   const [resume, setResume] = useState<Resume | null>(null);
   const [preferences, setPreferences] = useState<JobPreferences | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     let isMounted = true;
-    Promise.all([getProfile(), getCurrentResume(), getPreferences()])
-      .then(([profileData, resumeData, preferencesData]) => {
+    Promise.all([getCurrentResume(), getPreferences()])
+      .then(([resumeData, preferencesData]) => {
         if (!isMounted) return;
-        setProfile(profileData);
         setResume(resumeData);
         setPreferences(preferencesData);
       })
@@ -81,10 +63,7 @@ export function DashboardContent({ firstName }: { firstName: string }) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Card>
-          <p className="text-sm font-medium text-slate-500">Profile completion</p>
-          <p className="mt-2 text-3xl font-semibold text-slate-900">
-            {isLoading ? "–" : `${computeProfileCompletion(profile)}%`}
-          </p>
+          <ProfileCompleteness />
         </Card>
         <Card>
           <p className="text-sm font-medium text-slate-500">Resume status</p>
