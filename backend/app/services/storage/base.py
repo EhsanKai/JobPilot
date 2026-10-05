@@ -24,6 +24,15 @@ class FileStorage(ABC):
         """Persist `content` under `key` and return its storage reference."""
 
     @abstractmethod
+    def read(self, *, reference: str) -> bytes:
+        """Return the stored bytes for `reference`.
+
+        Raises `FileNotFoundError` if the file no longer exists. Reading never
+        modifies the stored original (V0.2 relies on this to re-process
+        resumes later).
+        """
+
+    @abstractmethod
     def delete(self, *, reference: str) -> None:
         """Remove a previously stored file. No-op if it does not exist."""
 

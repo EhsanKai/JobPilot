@@ -11,13 +11,19 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("STORAGE_PROVIDER", "local")
+# Tests must never reach a real (paid) AI API.
+os.environ["AI_PROVIDER"] = "disabled"
+os.environ.pop("ANTHROPIC_API_KEY", None)
 
+from app.ai.factory import get_ai_provider  # noqa: E402
+from app.ai.provider import AIProvider  # noqa: E402
 from app.db.base import Base  # noqa: E402
-from app.db.session import get_db  # noqa: E402
+from app.db.session import get_db, get_session_factory  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.storage.base import FileStorage  # noqa: E402
 from app.services.storage.factory import get_file_storage  # noqa: E402
 from app.services.storage.local import LocalFileStorage  # noqa: E402
+from tests.resume_helpers import FakeAIProvider  # noqa: E402
 
 TEST_DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -55,15 +61,30 @@ def file_storage(tmp_path) -> FileStorage:  # type: ignore[no-untyped-def]
 
 
 @pytest.fixture
-def client(db_session: Session, file_storage: FileStorage) -> Generator[TestClient, None, None]:
+def fake_ai() -> FakeAIProvider:
+    """The AI provider used by the app under test. Tests can set `.response`
+    to a dict (canned structured output) or an exception to raise."""
+    return FakeAIProvider()
+
+
+@pytest.fixture
+def client(
+    db_session: Session, file_storage: FileStorage, fake_ai: FakeAIProvider
+) -> Generator[TestClient, None, None]:
     def _override_get_db() -> Generator[Session, None, None]:
         yield db_session
 
     def _override_get_file_storage() -> FileStorage:
         return file_storage
 
+    def _override_get_ai_provider() -> AIProvider:
+        return fake_ai
+
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_file_storage] = _override_get_file_storage
+    app.dependency_overrides[get_ai_provider] = _override_get_ai_provider
+    # Background processing opens its own sessions; point them at the test DB.
+    app.dependency_overrides[get_session_factory] = lambda: TestSessionLocal
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

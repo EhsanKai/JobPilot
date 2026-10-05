@@ -14,11 +14,16 @@ class LocalFileStorage(FileStorage):
     """
 
     def __init__(self, base_path: str) -> None:
-        self._base_path = Path(base_path)
+        self._base_path = Path(base_path).resolve()
         self._base_path.mkdir(parents=True, exist_ok=True)
 
     def _resolve(self, reference: str) -> Path:
-        return self._base_path / reference
+        path = (self._base_path / reference).resolve()
+        # References are generated server-side, but never let one escape the
+        # storage root (e.g. "../../etc/passwd").
+        if not path.is_relative_to(self._base_path):
+            raise ValueError("Invalid storage reference.")
+        return path
 
     def save(self, *, key: str, content: BinaryIO) -> StoredFile:
         destination = self._resolve(key)
@@ -27,6 +32,9 @@ class LocalFileStorage(FileStorage):
             shutil.copyfileobj(content, f)
         size = destination.stat().st_size
         return StoredFile(reference=key, size=size)
+
+    def read(self, *, reference: str) -> bytes:
+        return self._resolve(reference).read_bytes()
 
     def delete(self, *, reference: str) -> None:
         path = self._resolve(reference)

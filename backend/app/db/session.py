@@ -16,3 +16,12 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def get_session_factory() -> sessionmaker[Session]:
+    """Session factory for work that outlives a request (background tasks).
+
+    A FastAPI dependency so tests can point background work at their own
+    database.
+    """
+    return SessionLocal

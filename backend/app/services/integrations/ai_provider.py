@@ -1,28 +1,21 @@
-"""Architectural placeholder for future AI capabilities (V0.5+).
+"""Architectural placeholders for future AI capabilities (V0.5+).
 
-Not implemented in V0. No calls to OpenAI, Anthropic, Google, or a local LLM
-happen here. This interface exists so business logic never calls a specific
-AI provider's SDK directly; a future `OpenAIProvider`, `AnthropicProvider`,
-`GoogleProvider`, or `LocalLLMProvider` would implement it instead.
+As of V0.2 the real, provider-agnostic AI layer lives in `app.ai`
+(`AIProvider` + `AIError` hierarchy, vendor implementations under
+`app.ai.providers`), and resume parsing is implemented in
+`app.services.resume_intelligence.parser.ResumeParser`.
+
+The interfaces below are still placeholders for later releases and are
+intentionally not implemented: no job matching or document generation
+exists yet.
 """
 
 from abc import ABC, abstractmethod
 
+from app.ai.provider import AIProvider
+from app.services.resume_intelligence.parser import ResumeParser
 
-class AIProvider(ABC):
-    """Contract every future AI provider implementation must satisfy."""
-
-    @abstractmethod
-    async def complete(self, prompt: str) -> str:
-        raise NotImplementedError
-
-
-class ResumeParser(ABC):
-    """Future capability: extract structured data from an uploaded resume."""
-
-    @abstractmethod
-    async def parse(self, resume_reference: str) -> dict:
-        raise NotImplementedError
+__all__ = ["AIProvider", "ResumeParser", "JobMatcher", "CoverLetterGenerator"]
 
 
 class JobMatcher(ABC):

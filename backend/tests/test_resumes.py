@@ -72,6 +72,41 @@ def test_uploading_new_resume_replaces_previous_one(
     assert current.json()["id"] == second.json()["id"]
 
 
+def test_new_upload_becomes_a_new_version_and_keeps_the_original(
+    client: TestClient, register_and_login, file_storage, db_session
+) -> None:  # type: ignore[no-untyped-def]
+    from app.models.resume import Resume
+
+    auth = register_and_login()
+    headers = _auth_headers(auth["access_token"])
+
+    first = client.post(
+        "/api/v1/resumes", headers=headers, files={"file": _pdf_file("first.pdf")}
+    ).json()
+    second = client.post(
+        "/api/v1/resumes", headers=headers, files={"file": _pdf_file("second.pdf")}
+    ).json()
+
+    assert first["version_number"] == 1
+    assert second["version_number"] == 2
+    listed = client.get("/api/v1/resumes", headers=headers).json()
+    assert [r["id"] for r in listed] == [second["id"], first["id"]]
+
+    stored = db_session.get(Resume, first["id"])
+    assert file_storage.read(reference=stored.storage_reference) == b"%PDF-1.4 fake pdf content"
+    assert stored.file_hash is not None and len(stored.file_hash) == 64
+
+
+def test_resume_versions_are_numbered_per_user(client: TestClient, register_and_login) -> None:  # type: ignore[no-untyped-def]
+    a = _auth_headers(register_and_login(email="a@example.com")["access_token"])
+    b = _auth_headers(register_and_login(email="b@example.com")["access_token"])
+
+    client.post("/api/v1/resumes", headers=a, files={"file": _pdf_file()})
+    response = client.post("/api/v1/resumes", headers=b, files={"file": _pdf_file()})
+
+    assert response.json()["version_number"] == 1
+
+
 def test_delete_resume_removes_it(client: TestClient, register_and_login) -> None:  # type: ignore[no-untyped-def]
     auth = register_and_login()
     headers = _auth_headers(auth["access_token"])

@@ -5,10 +5,13 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.factory import get_ai_provider
+from app.ai.provider import AIProvider
 from app.core.errors import UnauthorizedError
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.user import User
+from app.services.resume_intelligence.parser import AIResumeParser, ResumeParser
 
 _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
@@ -33,3 +36,7 @@ def get_current_user(
     if user is None:
         raise UnauthorizedError("User no longer exists.")
     return user
+
+
+def get_resume_parser(provider: AIProvider = Depends(get_ai_provider)) -> ResumeParser:
+    return AIResumeParser(provider)
