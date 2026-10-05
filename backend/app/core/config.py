@@ -44,6 +44,30 @@ class Settings(BaseSettings):
     # server restarted mid-run) and may be restarted.
     RESUME_PROCESSING_STALE_MINUTES: int = 15
 
+    # Job Discovery (V0.3). Both implemented sources use public, documented,
+    # unauthenticated job-board APIs, so no credentials are needed. Sources
+    # and the company boards they read are configuration, not code.
+    #
+    # Comma-separated source names to enable (see GET /jobs/sources).
+    JOB_SOURCES_ENABLED: str = "greenhouse,lever"
+    # Greenhouse board tokens: the `{token}` in job-boards.greenhouse.io/{token}.
+    GREENHOUSE_BOARD_TOKENS: str = "getyourguide,hellofresh,grover"
+    # Lever site names: the `{site}` in jobs.lever.co/{site}. Lever's API has
+    # no company-name field, so an optional display name can be given as
+    # `site:Display Name` (otherwise the site name is shown).
+    LEVER_SITES: str = "ppro:PPRO,netlight:Netlight"
+    # "global" (api.lever.co) or "eu" (api.eu.lever.co). A fixed choice, not
+    # a URL, so configuration can't point the fetcher at arbitrary hosts.
+    LEVER_INSTANCE: str = "global"
+    JOB_SOURCE_TIMEOUT_SECONDS: float = 20.0
+    # Safety cap on postings read from one board/site per run.
+    JOB_SOURCE_MAX_JOBS_PER_BOARD: int = 1000
+    # Maximum response size accepted from a source, in bytes.
+    JOB_SOURCE_MAX_RESPONSE_BYTES: int = 25_000_000
+    # A discovery run older than this is considered abandoned (e.g. the server
+    # restarted mid-run) and no longer blocks a new run.
+    JOB_DISCOVERY_STALE_MINUTES: int = 10
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]

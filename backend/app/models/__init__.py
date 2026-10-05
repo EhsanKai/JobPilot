@@ -1,7 +1,8 @@
 from app.models.application import Application, ApplicationStatus
 from app.models.deal_breaker import DealBreaker, DealBreakerType
+from app.models.discovery_run import DiscoveryRun, DiscoveryRunStatus
 from app.models.industry import Industry, UserIndustry
-from app.models.job import Job
+from app.models.job import Job, SalaryPeriod
 from app.models.job_preferences import (
     EmploymentType,
     JobPreferenceEmploymentType,
@@ -21,6 +22,7 @@ from app.models.resume import Resume, ResumeStatus
 from app.models.resume_profile import ResumeProfile, ResumeProfileStatus
 from app.models.skill import Skill, SkillProficiency, UserSkill
 from app.models.user import User
+from app.models.user_job import UserJob
 from app.models.user_profile import UserProfile
 
 __all__ = [
@@ -54,6 +56,10 @@ __all__ = [
     "ResumeProfile",
     "ResumeProfileStatus",
     "Job",
+    "SalaryPeriod",
+    "UserJob",
+    "DiscoveryRun",
+    "DiscoveryRunStatus",
     "Application",
     "ApplicationStatus",
 ]

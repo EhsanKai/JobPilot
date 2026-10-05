@@ -8,7 +8,7 @@ from app.core.logging import configure_logging
 
 configure_logging()
 
-app = FastAPI(title="JobPilot API", version="0.2.0")
+app = FastAPI(title="JobPilot API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,

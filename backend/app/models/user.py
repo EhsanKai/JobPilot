@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.models.professional_profile import ProfessionalProfile
     from app.models.resume import Resume
     from app.models.skill import UserSkill
+    from app.models.user_job import UserJob
     from app.models.user_profile import UserProfile
 
 
@@ -56,5 +57,8 @@ class User(Base, TimestampMixin):
         back_populates="user", cascade="all, delete-orphan"
     )
     deal_breakers: Mapped[list["DealBreaker"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    user_jobs: Mapped[list["UserJob"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

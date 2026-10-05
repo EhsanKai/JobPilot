@@ -1,0 +1,77 @@
+{
+  "jobs": [
+    {
+      "id": 4012345,
+      "internal_job_id": 2011111,
+      "title": "  Senior Backend Engineer   (Python) ",
+      "updated_at": "2026-09-28T10:15:00-04:00",
+      "first_published": "2026-09-20T08:00:00Z",
+      "requisition_id": "ENG-101",
+      "company_name": null,
+      "location": { "name": "Berlin, Germany" },
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/4012345?utm_source=linkedin&utm_medium=social",
+      "language": "en",
+      "metadata": [
+        { "id": 1, "name": "Employment Type", "value_type": "single_select", "value": "Full-time" },
+        { "id": 2, "name": "Cost Center", "value_type": "short_text", "value": "R&D" }
+      ],
+      "content": "&lt;p&gt;&lt;strong&gt;About Acme&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;We build logistics software &amp;amp; love it.&lt;/p&gt;&lt;h3&gt;What you'll do&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;Design and build Python services&lt;/li&gt;&lt;li&gt;Own our PostgreSQL data model&lt;/li&gt;&lt;/ul&gt;&lt;h3&gt;What you bring&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;5+ years of backend experience&lt;/li&gt;&lt;li&gt;Kubernetes and AWS in production&lt;/li&gt;&lt;/ul&gt;&lt;script&gt;alert('x')&lt;/script&gt;",
+      "departments": [{ "id": 13583, "name": "Engineering", "parent_id": null, "child_ids": [] }],
+      "offices": [
+        { "id": 8787, "name": "Berlin", "location": "Berlin, Germany", "parent_id": null, "child_ids": [] }
+      ],
+      "pay_input_ranges": [
+        { "min_cents": 7000000, "max_cents": 9000000, "currency_type": "EUR", "title": "Berlin", "blurb": "" }
+      ]
+    },
+    {
+      "id": 4012346,
+      "internal_job_id": 2011112,
+      "title": "Product Designer",
+      "updated_at": "2026-09-25T09:00:00Z",
+      "requisition_id": "DES-7",
+      "location": { "name": "Remote - Europe" },
+      "absolute_url": "https://acme.example.com/careers?gh_jid=4012346#apply",
+      "language": "en",
+      "metadata": null,
+      "content": "&lt;p&gt;Design delightful products in Figma.&lt;/p&gt;",
+      "departments": [{ "id": 13584, "name": "Design", "parent_id": null, "child_ids": [] }],
+      "offices": []
+    },
+    {
+      "id": 4012347,
+      "internal_job_id": 2011113,
+      "title": "Werkstudent Data Analytics (m/w/d)",
+      "updated_at": "2026-09-27T12:00:00+02:00",
+      "first_published": "2026-09-26T12:00:00+02:00",
+      "requisition_id": null,
+      "location": { "name": "Munich, Germany" },
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/4012347",
+      "language": "de",
+      "metadata": null,
+      "content": "&lt;p&gt;&lt;b&gt;Deine Aufgaben&lt;/b&gt;&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Dashboards mit Tableau bauen&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;&lt;b&gt;Dein Profil&lt;/b&gt;&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Studium der Informatik&lt;/li&gt;&lt;li&gt;SQL-Kenntnisse&lt;/li&gt;&lt;/ul&gt;",
+      "departments": [],
+      "offices": []
+    },
+    {
+      "id": 4012348,
+      "internal_job_id": 2011114,
+      "title": "   ",
+      "updated_at": "2026-09-27T12:00:00Z",
+      "location": { "name": "Berlin, Germany" },
+      "absolute_url": "https://job-boards.greenhouse.io/acme/jobs/4012348",
+      "content": ""
+    },
+    {
+      "id": 4012349,
+      "internal_job_id": 2011115,
+      "title": "Sneaky Job",
+      "updated_at": "2026-09-27T12:00:00Z",
+      "location": { "name": "Berlin, Germany" },
+      "absolute_url": "javascript:alert(document.cookie)",
+      "content": ""
+    },
+    "not-a-job-object"
+  ],
+  "meta": { "total": 6 }
+}
