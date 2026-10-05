@@ -1,8 +1,10 @@
-# JobPilot Architecture — V0, V0.1 & V0.2
+# JobPilot Architecture — V0 to V0.3
 
 This document captures the architectural decisions behind the V0 foundation,
-the V0.1 structured Job Search Profile and V0.2 Resume Intelligence, and how
-later versions are expected to build on them without a rewrite. V0.2 is
+the V0.1 structured Job Search Profile, V0.2 Resume Intelligence and V0.3
+Job Discovery, and how later versions are expected to build on them without
+a rewrite. V0.3 is summarized in §13 and documented in full in
+[`job-discovery.md`](job-discovery.md). V0.2 is
 summarized in §12 and documented in full in
 [`resume-intelligence.md`](resume-intelligence.md).
 
@@ -14,10 +16,11 @@ The long-term product is a pipeline:
 Job Sources → Connectors → Normalized Job Model → Matching Engine → Application Engine
 ```
 
-V0 only implements the data model at the "Normalized Job Model" stage (the
-`jobs` and `applications` tables) and the `JobSource` interface future
-connectors will implement. No connector, matching engine, or application
-engine logic exists yet — they are later versions. The point of building the
+V0 implemented the data model at the "Normalized Job Model" stage (the
+`jobs` and `applications` tables). V0.3 implements the first two stages:
+real `JobSource` connectors and the normalized, deduplicated `Job` model
+(§13). No matching engine or application engine logic exists yet — they are
+later versions. The point of building the
 interface now is that `app/api`, `app/services`, and the database schema
 never need to know which job source or AI provider is behind them.
 
@@ -37,13 +40,15 @@ and out of the ORM layer, so they're testable without spinning up FastAPI.
 
 ## 3. Provider-agnostic job sources
 
-`app/services/integrations/job_source.py` defines a `JobSource` abstract
-base class with a single `search()` method. No implementation exists in V0.
-Future connectors (`LinkedInConnector`, `IndeedConnector`,
-`StepStoneConnector`, `GreenhouseConnector`, `WorkdayConnector`, ...) will
-each implement this interface. The core application (matching, storage,
-application flow) will depend only on `JobSource`, never on a specific
-provider's API or scraping logic.
+V0 sketched a `JobSource` placeholder in `app/services/integrations/`.
+V0.3 replaced it with the real abstraction in
+`app/services/job_discovery/sources/base.py` (the placeholder was removed so
+the concept exists once). Implementations: `GreenhouseJobSource` and
+`LeverJobSource`, registered in a `JobSourceRegistry`. The discovery
+service, persistence and API depend only on `JobSource`, never on a
+specific provider. Sources declare their acquisition method (ATS job board,
+search API, web page) and the filters they apply natively; all of them
+produce the same `RawJob`. See [`job-discovery.md`](job-discovery.md).
 
 ## 4. AI-provider-agnostic design
 
@@ -92,9 +97,9 @@ The schema is normalized rather than storing lists as delimited strings:
   size, status). Since V0.2 it is also versioned (`version_number`) and
   hashed (`file_hash`), and `status` tracks Resume Intelligence processing.
   Parsed content lives in `resume_profiles` (see §12).
-- `jobs` — a normalized-job foundation table. Not populated by anything in
-  V0; exists so `applications.job_id` has somewhere to point once job
-  discovery (V0.3+) lands.
+- `jobs` — the canonical job posting. A foundation table in V0; since V0.3
+  populated by Job Discovery and global (one row per posting), with
+  per-user state in `user_jobs` (§13).
 - `applications` — a foundation table for the future application workflow
   (status, salary expectation, start date). No document generation or
   submission logic exists yet.
@@ -132,7 +137,7 @@ never leak a stack trace to the client.
 - `app/` — Next.js App Router pages. Pages are thin: they compose
   components and wrap authenticated routes in `AppShell`.
 - `components/` — grouped by domain (`auth/`, `profile/`, `resume/`,
-  `dashboard/`) plus a small `ui/` kit (`Button`, `Input`, `Card`, `Alert`)
+  `dashboard/`, `jobs/`) plus a small `ui/` kit (`Button`, `Input`, `Card`, `Alert`)
   so loading/error/success states look consistent everywhere. `profile/`
   holds one component per Job Search Profile section (`ProfileForm`,
   `SkillsManager`, `LanguagesManager`, `DesiredRolesManager`,
@@ -143,7 +148,7 @@ never leak a stack trace to the client.
   `ApiError`, and is the only place that knows about `NEXT_PUBLIC_API_URL`.
 - `lib/api/*` — one typed module per backend domain (`auth.ts`,
   `profile.ts`, `preferences.ts`, `resumes.ts`, `users.ts`, `skills.ts`,
-  `languages.ts`, `completeness.ts`), so components never construct fetch
+  `languages.ts`, `completeness.ts`, `jobs.ts`), so components never construct fetch
   calls or URLs themselves.
 - `types/*` — TypeScript interfaces mirroring the backend's Pydantic
   schemas, kept in sync by hand in V0 (a generated client is a reasonable
@@ -295,10 +300,10 @@ future refactor can't reintroduce the bug silently.
 
 ## 11. Why no job matching or scraping yet
 
-These require external APIs, significant business logic, and product
-decisions (which job sources, what scoring model, what automation risk is
-acceptable) that are out of scope so far. V0.2 introduces AI only for
-resume extraction (§12). Building the interfaces
+Matching requires significant business logic and product decisions (what
+scoring model, what automation risk is acceptable) that are out of scope so
+far. V0.2 introduces AI only for resume extraction (§12). V0.3 reads public,
+documented job-board APIs; it does not scrape websites (§13). Building the interfaces
 now (`JobSource`, `AIProvider`, `ResumeParser`, `JobMatcher`,
 `CoverLetterGenerator`) without the implementations means V0.3–V0.9 can be
 built additively on top of this schema and these service boundaries,
@@ -365,4 +370,51 @@ AI output is untrusted until two things have happened. First, the
 deterministic truth guard has checked it against the resume text. Second,
 the user has reviewed every item and confirmed. Only a `confirmed` profile
 counts as the trusted Resume Profile for future features.
+
+## 13. V0.3 — Job Discovery
+
+Full documentation: [`job-discovery.md`](job-discovery.md).
+
+### 13.1 Pipeline
+
+```
+JobSearchCriteria ─► JobDiscoveryService ─► JobSource.search() ─► RawJob ─► JobNormalizer ─► filters ─► upsert Job + UserJob
+ (or from Job        (no provider logic)    Greenhouse, Lever      loose     deterministic    criteria   dedup_key unique
+  Preferences)                              over JsonFetcher                 no AI             JobPilot
+```
+
+`POST /jobs/discover` creates a `DiscoveryRun` and returns 202; the run
+executes as a FastAPI background task with its own DB session (the same
+pattern as resume processing; no Redis/Celery). Sources run concurrently and
+are isolated: one failing board or source makes the run `partial`, not
+failed. The frontend polls the run.
+
+### 13.2 Data model decisions
+
+- **Global `jobs`, per-user `user_jobs`.** A posting is stored once however
+  many users discover it. `user_jobs` records discovery and the saved flag
+  and is the visibility boundary (no row → 404). Future application status
+  attaches to `user_jobs` / `applications`, never to `jobs`.
+- **The V0 `jobs` table was evolved in place** (`external_id → source_job_id`,
+  `company → company_name`, `url → source_url`, plus the new columns), so
+  `applications.job_id` keeps working. `canonical_url` is required.
+- **Deduplication key** `dedup_key` is unique: source + source job id, or
+  source + hash of the canonical URL. Never the title. Cross-source
+  deduplication is V0.4.
+- **Shared vocabularies.** `jobs.employment_type`, `work_model` and
+  `seniority` reuse the `employment_type`, `remote_preference` and
+  `professional_seniority_level` enum types, so V0.5 matching compares the
+  same values the user picked in preferences. The V0.3 migration also adds
+  `WORKING_STUDENT` to `employment_type`. The ORM had it since V0.1, but no
+  earlier migration created it.
+- **JSONB lists** for requirements, responsibilities, technologies and
+  locations, the structured-JSON convention of Resume Profiles.
+- **`discovery_runs`** keep criteria and per-source summaries for status
+  polling, debugging and later analytics.
+
+### 13.3 Honesty about filters
+
+Each source declares `native_filters`. Everything else JobPilot either
+applies to the fetched postings or reports as `not_applied`; the summary
+says which, per source. A source never claims a filter it didn't apply.
 

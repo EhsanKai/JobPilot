@@ -118,7 +118,12 @@ class GreenhouseJobSource(BoardJobSource):
             source_job_id=as_str(item.get("id")),
             source_company_key=board.key,
             title=as_str(item.get("title")),
-            company_name=as_str(item.get("company_name")) or company_name or board.key,
+            # A configured display name wins; then the posting's own field, the
+            # board's organization name, and finally the board token.
+            company_name=board.company_name
+            or as_str(item.get("company_name"))
+            or company_name
+            or board.key,
             url=as_str(item.get("absolute_url")),
             location=location_name,
             locations=tuple(locations),

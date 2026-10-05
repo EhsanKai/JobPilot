@@ -464,6 +464,9 @@ def test_list_jobs_pagination_and_filters(client: TestClient, auth: dict[str, st
     assert list_jobs(client, auth, source="lever")["total"] == 2
     assert list_jobs(client, auth, q="python")["total"] == 1
     assert list_jobs(client, auth, q="100%_")["total"] == 0  # LIKE wildcards are escaped
+    # Comma-separated terms are OR'ed, like discovery keywords.
+    assert list_jobs(client, auth, q="python, typescript")["total"] == 2
+    assert list_jobs(client, auth, location="Munich, Hamburg")["total"] == 2
     assert list_jobs(client, auth, location="hamburg")["total"] == 1  # matches allLocations
     assert list_jobs(client, auth, work_model="remote")["total"] == 2
     assert list_jobs(client, auth, work_model=["remote", "hybrid"])["total"] == 3

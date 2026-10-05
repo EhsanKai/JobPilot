@@ -6,8 +6,8 @@ jobs across multiple sources, calculate an explainable match score, generate
 tailored application documents, and track applications end to end.
 
 This repository currently implements **V0 — Foundation**,
-**V0.1 — User Profile & Job Preference Intelligence**, and
-**V0.2 — Resume Intelligence**.
+**V0.1 — User Profile & Job Preference Intelligence**,
+**V0.2 — Resume Intelligence**, and **V0.3 — Job Discovery Foundation**.
 
 ## 1. What JobPilot is
 
@@ -15,7 +15,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 + V0.1 + V0.2)
+## 2. Current scope (V0 – V0.3)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -86,6 +86,35 @@ structured, evidence-backed Resume Profile that the user reviews and confirms.
 V0.2 deliberately does **not** search for jobs, compute match scores, or
 generate documents. See [`docs/resume-intelligence.md`](docs/resume-intelligence.md).
 
+V0.3 adds **Job Discovery**: finding real job postings and storing them in
+one canonical model. See [`docs/job-discovery.md`](docs/job-discovery.md).
+
+- A provider-agnostic **`JobSource`** interface and a source registry. The
+  discovery service never depends on a specific provider.
+- Two real, public, documented sources that need no credentials: the
+  **Greenhouse Job Board API** and the **Lever Postings API**, reading the
+  company boards configured in `.env`.
+- `RawJob` → deterministic **normalizer** (no AI) → canonical **`Job`**:
+  whitespace, URLs (canonical + original), dates, salary, employment type,
+  work model, seniority, technologies, requirements/responsibilities, and
+  required-field validation.
+- **Deduplication** by source + source job id (canonical-URL fallback), safe
+  under concurrent runs. Refreshing updates changed jobs and never deletes
+  or duplicates.
+- **Global jobs + per-user `UserJob`** (discovered / saved), ready for future
+  application tracking. Search criteria can come from the Job Preference
+  Profile.
+- Asynchronous **discovery runs** with per-source results, partial-failure
+  handling and an honest report of which filters each source could apply.
+- A **Jobs** page (search/discover controls, job cards, saved jobs,
+  pagination, loading/empty/error states) and a **job details** page that
+  separates JobPilot's structured data from the original posting and links
+  to it.
+
+V0.3 deliberately does **not** provide AI matching, match scores,
+auto-apply, browser automation, LinkedIn automation, or application
+tracking.
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -93,6 +122,7 @@ generate documents. See [`docs/resume-intelligence.md`](docs/resume-intelligence
 | Frontend   | Next.js (App Router), React, TypeScript, Tailwind CSS   |
 | Backend    | Python, FastAPI, Pydantic, SQLAlchemy, Alembic          |
 | AI         | Provider-agnostic `AIProvider`; Anthropic implementation |
+| Job sources | Provider-agnostic `JobSource`; Greenhouse + Lever (httpx) |
 | Extraction | pypdf (PDF), python-docx (DOCX)                          |
 | Database   | PostgreSQL                                              |
 | Infra      | Docker Compose (PostgreSQL)                             |
@@ -103,7 +133,7 @@ generate documents. See [`docs/resume-intelligence.md`](docs/resume-intelligence
 ```
 jobpilot/
 ├── frontend/           Next.js app (App Router)
-│   ├── app/            Routes: /, /login, /register, /dashboard, /profile, ...
+│   ├── app/            Routes: /, /login, /register, /dashboard, /profile, /jobs, ...
 │   ├── components/     Reusable UI, auth, profile, resume, dashboard components
 │   ├── lib/             API client, auth token storage, typed API calls
 │   └── types/           Shared TypeScript types mirroring backend schemas
@@ -113,19 +143,20 @@ jobpilot/
 │   │   ├── ai/          AI provider abstraction, providers, versioned prompts
 │   │   ├── api/v1/      Routers: auth, users, profile (+ skills/languages/
 │   │   │                  completeness), preferences (+ job-titles/locations),
-│   │   │                  resumes (+ Resume Intelligence)
+│   │   │                  resumes (+ Resume Intelligence), jobs (V0.3)
 │   │   ├── core/        Config, security, logging, error handling
 │   │   ├── db/          SQLAlchemy base + session
 │   │   ├── models/      SQLAlchemy models
 │   │   ├── schemas/     Pydantic request/response schemas
 │   │   └── services/    Business logic, storage abstraction, resume_intelligence/
-│   │                      pipeline, future interfaces
+│   │                      pipeline, job_discovery/ (sources, normalizer, discovery)
 │   ├── alembic/         Database migrations
 │   └── tests/           Pytest suite
 │
 ├── docs/
 │   ├── architecture.md
-│   └── resume-intelligence.md
+│   ├── resume-intelligence.md
+│   └── job-discovery.md
 │
 ├── docker-compose.yml   PostgreSQL (dev infrastructure)
 ├── .env.example
@@ -156,6 +187,10 @@ Edit `.env` as needed. Never commit `.env` — it's gitignored. Key variables:
   analysis reports "AI provider not configured". See
   [`docs/resume-intelligence.md`](docs/resume-intelligence.md#configuration-environment-only)
   for all AI-related settings.
+- `JOB_SOURCES_ENABLED` / `GREENHOUSE_BOARD_TOKENS` / `LEVER_SITES` /
+  `LEVER_INSTANCE`: which job sources and company boards Job Discovery
+  (V0.3) reads. The sources are public APIs and need no credentials. See
+  [`docs/job-discovery.md`](docs/job-discovery.md#4-configuration).
 
 ## 7. Start PostgreSQL
 
@@ -223,6 +258,9 @@ Backend tests run against a separate `jobpilot_test` database (the
 with `createdb jobpilot_test` or let your Postgres role create it).
 Tests never call a real AI API: they force `AI_PROVIDER=disabled` and inject a
 deterministic fake provider backed by fixtures in `backend/tests/fixtures/resume/`.
+Tests never call a real job board either: sources run over a mocked HTTP
+transport with fixtures in `backend/tests/fixtures/jobs/`, and real HTTP
+transports raise inside the test suite.
 
 Frontend:
 
@@ -234,7 +272,7 @@ npm run typecheck  # tsc --noEmit
 npm run build    # production build sanity check
 ```
 
-## 12. API endpoints (V0 + V0.1 + V0.2)
+## 12. API endpoints (V0 – V0.3)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -277,6 +315,17 @@ PATCH  /resumes/{id}/profile/items/{item_id}   accept | edit | reject | reset
 POST   /resumes/{id}/profile/accept-pending
 POST   /resumes/{id}/profile/confirm
 POST   /resumes/{id}/profile/reopen
+
+GET    /jobs/sources                    job sources and the filters each can apply
+GET    /jobs/criteria/defaults          search criteria derived from job preferences
+POST   /jobs/discover                   start discovery (202); body {"criteria": {...}} optional
+GET    /jobs/discover/runs/latest       latest discovery run
+GET    /jobs/discover/runs/{id}         run status + per-source summary
+GET    /jobs                            your jobs: page, page_size, source, q, location,
+                                        work_model, employment_type, posted_after, saved, sort
+GET    /jobs/{id}                       full job incl. original posting URL
+PUT    /jobs/{id}/save                  save
+DELETE /jobs/{id}/save                  unsave
 ```
 
 Note: `PUT /preferences` and `PUT /profile` replace the fields they cover in
@@ -290,8 +339,8 @@ in `docs/architecture.md`.
 ```
 V0     Foundation                  ✅
 V0.1   User Profile & Job Preference Intelligence   ✅
-V0.2   Resume Intelligence         ✅ (current)
-V0.3   Job Discovery
+V0.2   Resume Intelligence         ✅
+V0.3   Job Discovery               ✅ (current)
 V0.4   Job Normalization & Deduplication
 V0.5   AI Matching
 V0.6   Job Dashboard / MVP

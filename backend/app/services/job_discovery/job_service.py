@@ -26,6 +26,10 @@ def _like(term: str) -> str:
     return f"%{escaped}%"
 
 
+def _terms(value: str | None) -> list[str]:
+    return [term.strip() for term in (value or "").split(",") if term.strip()][:20]
+
+
 def to_summary(job: Job, user_job: UserJob) -> JobSummaryRead:
     return JobSummaryRead(
         id=job.id,
@@ -98,22 +102,30 @@ def list_jobs(
     query = _visible(user)
     if sources:
         query = query.where(Job.source.in_(sources))
-    if q and q.strip():
-        pattern = _like(q.strip())
+    # Comma-separated terms are OR'ed, as in discovery criteria.
+    if terms := _terms(q):
         query = query.where(
             or_(
-                Job.title.ilike(pattern, escape="\\"),
-                Job.company_name.ilike(pattern, escape="\\"),
-                Job.description.ilike(pattern, escape="\\"),
-                cast(Job.technologies, String).ilike(pattern, escape="\\"),
+                *(
+                    column.ilike(_like(term), escape="\\")
+                    for term in terms
+                    for column in (
+                        Job.title,
+                        Job.company_name,
+                        Job.description,
+                        cast(Job.technologies, String),
+                    )
+                )
             )
         )
-    if location and location.strip():
-        pattern = _like(location.strip())
+    if places := _terms(location):
         query = query.where(
             or_(
-                Job.location.ilike(pattern, escape="\\"),
-                cast(Job.locations, String).ilike(pattern, escape="\\"),
+                *(
+                    column.ilike(_like(place), escape="\\")
+                    for place in places
+                    for column in (Job.location, cast(Job.locations, String))
+                )
             )
         )
     if work_models:

@@ -260,6 +260,7 @@ def test_employment_type(
         (None, ["Remote - Europe"], RemotePreference.REMOTE),
         (None, ["Berlin (Hybrid)"], RemotePreference.HYBRID),
         (None, ["Berlin, Germany"], None),  # never inferred as on-site
+        (None, ["Remote Sensing Lab, Munich"], None),
     ],
 )
 def test_work_model(

@@ -202,9 +202,9 @@ export function JobsDashboard({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: Job
       <section aria-labelledby="job-results-heading" className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 id="job-results-heading" className="text-lg font-semibold text-slate-900">
-            {savedOnly ? "Saved jobs" : "Your jobs"}
+            {savedOnly ? "Saved jobs" : "Your jobs"}{" "}
             {jobs && !isLoadingJobs && (
-              <span className="ml-2 text-sm font-normal text-slate-500">({jobs.total})</span>
+              <span className="ml-1 text-sm font-normal text-slate-500">({jobs.total})</span>
             )}
           </h2>
           <label className="flex items-center gap-2 text-sm text-slate-700">

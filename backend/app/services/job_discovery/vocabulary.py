@@ -59,7 +59,11 @@ WORK_MODEL_PATTERNS: tuple[tuple[RemotePreference, re.Pattern[str]], ...] = (
 # without the word "remote" doesn't mean the job is on-site.
 WORK_MODEL_LOCATION_PATTERNS: tuple[tuple[RemotePreference, re.Pattern[str]], ...] = (
     (RemotePreference.HYBRID, re.compile(r"\bhybrid\b", re.I)),
-    (RemotePreference.REMOTE, re.compile(r"\bremote\b|\bhome.?office\b", re.I)),
+    (
+        RemotePreference.REMOTE,
+        # "Remote Sensing Engineer" is not a remote job.
+        re.compile(r"\bremote\b(?!\s+(sensing|control|monitoring))|\bhome.?office\b", re.I),
+    ),
 )
 
 # --- Seniority (from title) ------------------------------------------------------
