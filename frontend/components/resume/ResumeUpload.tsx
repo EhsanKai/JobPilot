@@ -19,7 +19,12 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function ResumeUpload() {
+interface ResumeUploadProps {
+  /** Called whenever the current resume changes (loaded, uploaded, deleted). */
+  onResumeChange?: (resume: Resume | null) => void;
+}
+
+export function ResumeUpload({ onResumeChange }: ResumeUploadProps = {}) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [resume, setResume] = useState<Resume | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,12 +32,17 @@ export function ResumeUpload() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const onResumeChangeRef = useRef(onResumeChange);
+  onResumeChangeRef.current = onResumeChange;
 
   useEffect(() => {
     let isMounted = true;
     getCurrentResume()
       .then((data) => {
-        if (isMounted) setResume(data);
+        if (isMounted) {
+          setResume(data);
+          onResumeChangeRef.current?.(data);
+        }
       })
       .catch((err) => {
         if (isMounted) {
@@ -64,6 +74,7 @@ export function ResumeUpload() {
     try {
       const uploaded = await uploadResume(file);
       setResume(uploaded);
+      onResumeChange?.(uploaded);
       setSuccessMessage("Resume uploaded successfully.");
     } catch (err) {
       setError(
@@ -85,7 +96,10 @@ export function ResumeUpload() {
 
     try {
       await deleteResume(resume.id);
-      setResume(null);
+      // Fall back to the previous version, if any.
+      const previous = await getCurrentResume();
+      setResume(previous);
+      onResumeChange?.(previous);
       setSuccessMessage("Resume deleted.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Unable to delete your resume.");
@@ -108,7 +122,8 @@ export function ResumeUpload() {
           <div>
             <p className="font-medium text-slate-900">{resume.file_name}</p>
             <p className="text-sm text-slate-500">
-              {formatFileSize(resume.file_size)} &middot; Status: {resume.status}
+              Version {resume.version_number} &middot; {formatFileSize(resume.file_size)} &middot;
+              Uploaded {new Date(resume.created_at).toLocaleDateString()}
             </p>
           </div>
           <Button variant="danger" onClick={handleDelete} isLoading={isDeleting}>
@@ -121,7 +136,7 @@ export function ResumeUpload() {
 
       <div>
         <label htmlFor="resume-file" className="text-sm font-medium text-slate-700">
-          {resume ? "Replace resume" : "Upload resume"}
+          {resume ? "Upload a new version" : "Upload resume"}
         </label>
         <input
           ref={fileInputRef}
@@ -133,7 +148,10 @@ export function ResumeUpload() {
           className="mt-1 block w-full text-sm text-slate-700 file:mr-4 file:rounded-lg file:border-0 file:bg-brand-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-brand-700 hover:file:bg-brand-100"
         />
         {isUploading && <p className="mt-2 text-sm text-slate-500">Uploading...</p>}
-        <p className="mt-1 text-xs text-slate-400">PDF or DOCX, up to 10MB.</p>
+        <p className="mt-1 text-xs text-slate-400">
+          PDF or DOCX, up to 10MB.
+          {resume ? " Previous versions are kept; your original file is never modified." : ""}
+        </p>
       </div>
     </div>
   );

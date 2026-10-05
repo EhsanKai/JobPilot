@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardContent } from "@/components/dashboard/DashboardContent";
 
+import { makeResume } from "./fixtures/resumeProfile";
+
 const getProfileCompletenessMock = vi.fn();
 const getCurrentResumeMock = vi.fn();
 const getPreferencesMock = vi.fn();
@@ -66,5 +68,51 @@ describe("DashboardContent", () => {
     expect(screen.getByText("Resume status")).toBeInTheDocument();
     expect(screen.getByText("Job preferences")).toBeInTheDocument();
     await screen.findByText("42%");
+  });
+
+  it("prompts to upload a resume when there is none", async () => {
+    render(<DashboardContent firstName="Jane" />);
+    expect(await screen.findByText("Not uploaded")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Upload Resume/ })).toHaveAttribute(
+      "href",
+      "/profile/resume"
+    );
+  });
+
+  it("shows that an analyzed resume still needs review", async () => {
+    getCurrentResumeMock.mockResolvedValue(makeResume({ status: "needs_review" }));
+    render(<DashboardContent firstName="Jane" />);
+
+    const progress = await screen.findByRole("list", { name: "Resume progress" });
+    expect(progress).toHaveTextContent("Uploaded");
+    expect(progress).toHaveTextContent("Analyzed");
+    expect(progress).toHaveTextContent("Review required");
+    expect(screen.getByRole("link", { name: /Review Resume/ })).toHaveAttribute(
+      "href",
+      "/profile/resume/review"
+    );
+  });
+
+  it("shows a confirmed resume profile", async () => {
+    getCurrentResumeMock.mockResolvedValue(makeResume({ status: "confirmed" }));
+    render(<DashboardContent firstName="Jane" />);
+
+    const progress = await screen.findByRole("list", { name: "Resume progress" });
+    expect(progress).toHaveTextContent("Confirmed");
+    expect(screen.getByRole("link", { name: /View Resume Profile/ })).toBeInTheDocument();
+  });
+
+  it("offers analysis for an uploaded but unanalyzed resume", async () => {
+    getCurrentResumeMock.mockResolvedValue(makeResume({ status: "uploaded" }));
+    render(<DashboardContent firstName="Jane" />);
+
+    expect(await screen.findByRole("link", { name: /Analyze Resume/ })).toBeInTheDocument();
+  });
+
+  it("surfaces a failed analysis", async () => {
+    getCurrentResumeMock.mockResolvedValue(makeResume({ status: "ocr_required" }));
+    render(<DashboardContent firstName="Jane" />);
+
+    expect(await screen.findByText(/OCR required/)).toBeInTheDocument();
   });
 });

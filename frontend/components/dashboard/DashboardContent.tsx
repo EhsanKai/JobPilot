@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { getPreferences } from "@/lib/api/preferences";
 import { getCurrentResume } from "@/lib/api/resumes";
 import { Card } from "@/components/ui/Card";
 import { ProfileCompleteness } from "@/components/profile/ProfileCompleteness";
+import { isInProgress } from "@/lib/resumeIntelligence";
 import type { JobPreferences } from "@/types/preferences";
 import type { Resume } from "@/types/resume";
 
@@ -20,6 +22,68 @@ const UPCOMING_FEATURES: UpcomingFeature[] = [
   { title: "Application Assistant", version: "V0.7" },
   { title: "Application Tracking", version: "V0.12" },
 ];
+
+type StepState = "done" | "warning" | "pending" | "error";
+
+interface ResumeStep {
+  label: string;
+  state: StepState;
+}
+
+interface ResumeWidget {
+  steps: ResumeStep[];
+  action: { label: string; href: string } | null;
+}
+
+/** Resume + Resume Intelligence progress for the dashboard card. */
+export function describeResume(resume: Resume | null): ResumeWidget {
+  if (!resume) {
+    return {
+      steps: [{ label: "Not uploaded", state: "pending" }],
+      action: { label: "Upload Resume", href: "/profile/resume" },
+    };
+  }
+  const uploaded: ResumeStep = { label: "Uploaded", state: "done" };
+  switch (resume.status) {
+    case "uploaded":
+      return {
+        steps: [uploaded, { label: "Not analyzed yet", state: "pending" }],
+        action: { label: "Analyze Resume", href: "/profile/resume" },
+      };
+    case "needs_review":
+      return {
+        steps: [uploaded, { label: "Analyzed", state: "done" }, { label: "Review required", state: "warning" }],
+        action: { label: "Review Resume", href: "/profile/resume/review" },
+      };
+    case "confirmed":
+      return {
+        steps: [uploaded, { label: "Analyzed", state: "done" }, { label: "Confirmed", state: "done" }],
+        action: { label: "View Resume Profile", href: "/profile/resume/review" },
+      };
+    case "ocr_required":
+      return {
+        steps: [uploaded, { label: "Text could not be read (OCR required)", state: "error" }],
+        action: { label: "Upload a text-based resume", href: "/profile/resume" },
+      };
+    case "failed":
+      return {
+        steps: [uploaded, { label: "Analysis failed", state: "error" }],
+        action: { label: "Try again", href: "/profile/resume" },
+      };
+    default:
+      return {
+        steps: [uploaded, { label: "Analyzing...", state: "pending" }],
+        action: isInProgress(resume.status) ? { label: "View progress", href: "/profile/resume" } : null,
+      };
+  }
+}
+
+const STEP_ICONS: Record<StepState, { icon: string; className: string }> = {
+  done: { icon: "✓", className: "text-emerald-600" },
+  warning: { icon: "⚠", className: "text-amber-600" },
+  pending: { icon: "○", className: "text-slate-400" },
+  error: { icon: "✕", className: "text-red-600" },
+};
 
 function computePreferencesStatus(preferences: JobPreferences | null): string {
   if (!preferences) return "Not started";
@@ -67,9 +131,11 @@ export function DashboardContent({ firstName }: { firstName: string }) {
         </Card>
         <Card>
           <p className="text-sm font-medium text-slate-500">Resume status</p>
-          <p className="mt-2 text-3xl font-semibold text-slate-900 capitalize">
-            {isLoading ? "–" : resume?.status ?? "Not uploaded"}
-          </p>
+          {isLoading ? (
+            <p className="mt-2 text-3xl font-semibold text-slate-900">–</p>
+          ) : (
+            <ResumeStatusSummary resume={resume} />
+          )}
         </Card>
         <Card>
           <p className="text-sm font-medium text-slate-500">Job preferences</p>
@@ -92,6 +158,29 @@ export function DashboardContent({ firstName }: { firstName: string }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ResumeStatusSummary({ resume }: { resume: Resume | null }) {
+  const { steps, action } = describeResume(resume);
+  return (
+    <div className="mt-2 flex flex-col gap-3">
+      <ul className="flex flex-col gap-1 text-sm text-slate-700" aria-label="Resume progress">
+        {steps.map((step) => (
+          <li key={step.label}>
+            <span className={STEP_ICONS[step.state].className} aria-hidden="true">
+              {STEP_ICONS[step.state].icon}
+            </span>{" "}
+            {step.label}
+          </li>
+        ))}
+      </ul>
+      {action && (
+        <Link href={action.href} className="text-sm font-medium text-brand-700 hover:underline">
+          {action.label} →
+        </Link>
+      )}
     </div>
   );
 }

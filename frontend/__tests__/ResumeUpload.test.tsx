@@ -74,4 +74,25 @@ describe("ResumeUpload", () => {
     );
     expect(uploadResumeMock).not.toHaveBeenCalled();
   });
+
+  it("treats a new upload as a new version of an existing resume", async () => {
+    getCurrentResumeMock.mockResolvedValue({
+      id: "resume-1",
+      user_id: "user-1",
+      version_number: 2,
+      file_name: "cv-2026.pdf",
+      mime_type: "application/pdf",
+      file_size: 2048,
+      status: "needs_review",
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    const onResumeChange = vi.fn();
+    render(<ResumeUpload onResumeChange={onResumeChange} />);
+
+    expect(await screen.findByText("cv-2026.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/Version 2/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/upload a new version/i)).toBeInTheDocument();
+    expect(onResumeChange).toHaveBeenCalledWith(expect.objectContaining({ id: "resume-1" }));
+  });
 });
