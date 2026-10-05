@@ -9,6 +9,7 @@ import type { User } from "@/types/user";
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/jobs", label: "Jobs" },
   { href: "/profile", label: "Profile" },
   { href: "/profile/preferences", label: "Preferences" },
   { href: "/profile/resume", label: "Resume" },
@@ -43,7 +44,8 @@ export function AppShell({ children }: AppShellProps) {
                 key={link.href}
                 href={link.href}
                 className={`text-sm font-medium ${
-                  pathname === link.href
+                  pathname === link.href ||
+                  (link.href === "/jobs" && pathname.startsWith("/jobs/"))
                     ? "text-brand-700"
                     : "text-slate-600 hover:text-slate-900"
                 }`}

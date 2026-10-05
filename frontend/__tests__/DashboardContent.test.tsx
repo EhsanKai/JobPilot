@@ -54,11 +54,17 @@ describe("DashboardContent", () => {
 
   it("lists upcoming features as not-yet-available, clearly labeled", async () => {
     render(<DashboardContent firstName="Jane" />);
-    expect(screen.getByText("Job Search")).toBeInTheDocument();
-    expect(screen.getByText("Coming in V0.3")).toBeInTheDocument();
+    expect(screen.queryByText("Coming in V0.3")).not.toBeInTheDocument();
     expect(screen.getByText("AI Matching")).toBeInTheDocument();
     expect(screen.getByText("Application Assistant")).toBeInTheDocument();
     expect(screen.getByText("Application Tracking")).toBeInTheDocument();
+    await screen.findByText("42%");
+  });
+
+  it("links to Job Search, which is available since V0.3", async () => {
+    render(<DashboardContent firstName="Jane" />);
+    expect(screen.getByText("Job Search")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Find jobs" })).toHaveAttribute("href", "/jobs");
     await screen.findByText("42%");
   });
 

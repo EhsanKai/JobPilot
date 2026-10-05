@@ -17,7 +17,6 @@ interface UpcomingFeature {
 }
 
 const UPCOMING_FEATURES: UpcomingFeature[] = [
-  { title: "Job Search", version: "V0.3" },
   { title: "AI Matching", version: "V0.5" },
   { title: "Application Assistant", version: "V0.7" },
   { title: "Application Tracking", version: "V0.12" },
@@ -144,6 +143,21 @@ export function DashboardContent({ firstName }: { firstName: string }) {
           </p>
         </Card>
       </div>
+
+      <Card className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-medium text-slate-900">Job Search</p>
+          <p className="text-sm text-slate-500">
+            Discover real postings from public company job boards.
+          </p>
+        </div>
+        <Link
+          href="/jobs"
+          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          Find jobs
+        </Link>
+      </Card>
 
       <div>
         <h2 className="text-lg font-semibold text-slate-900">Upcoming features</h2>
