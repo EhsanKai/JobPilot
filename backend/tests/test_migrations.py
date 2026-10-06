@@ -1,9 +1,10 @@
 """Alembic migrations against a real, separate database.
 
-    V0 data    -> upgrade head                       (V0 -> ... -> V0.5)
+    V0 data    -> upgrade head                       (V0 -> ... -> V0.6)
     V0.3 data  -> upgrade -> downgrade -> upgrade    (V0.4 roundtrip)
     V0.4 merged data -> downgrade                    (merged jobs split back, nothing lost)
     V0.4.1 data -> upgrade -> downgrade -> upgrade   (V0.5.0 roundtrip, create-only)
+    V0.5 data  -> upgrade -> downgrade -> upgrade    (V0.6 roundtrip, additive)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -35,6 +36,7 @@ V0 = "93304613c2dc"
 V03 = "c3f9d2e4a8b1"
 V04 = "d4a7e3b9c2f1"  # also the V0.4.1 schema (V0.4.1 added no migration)
 V05 = "a56b296b53a5"
+V06 = "c7d2e9f4b1a6"
 
 USER_ID = uuid.UUID("00000000-0000-4000-8000-0000000000a1")
 GH_JOB = uuid.UUID("00000000-0000-4000-8000-0000000000b1")
@@ -607,8 +609,9 @@ def test_v041_data_survives_v05_upgrade_downgrade_upgrade(migration_db: Engine) 
     enums = enum_values(migration_db)
     assert {k: v for k, v in enums.items() if k not in V05_ENUMS} == enums_before
 
-    # -> head (V0.5.0 is head)
-    command.upgrade(config, "head")
+    # V0.5.0 again (it was head when this test was written; V0.6 has its
+    # own roundtrip test below)
+    command.upgrade(config, V05)
     assert_v05_schema(migration_db)
     seed_v05_rows(migration_db)
 
@@ -620,9 +623,147 @@ def test_v041_data_survives_v05_upgrade_downgrade_upgrade(migration_db: Engine) 
     assert enum_values(migration_db) == enums_before
 
     # V0.4.1 -> V0.5.0 again
-    command.upgrade(config, "head")
+    command.upgrade(config, V05)
     assert data_fingerprints(migration_db, v04_tables) == data_before
     assert schema_fingerprint(migration_db, v04_tables) == schema_before
     assert_v05_schema(migration_db)
     for table in V05_TABLES:
         assert rows(migration_db, f'SELECT count(*) AS n FROM "{table}"') == [{"n": 0}]
+
+
+# --- V0.6: job matching & explainability (additive) -----------------------------------
+
+V06_MATCH_COLUMNS = {
+    "job_score": "numeric",
+    "preference_score": "numeric",
+    "job_coverage": "numeric",
+    "preference_coverage": "numeric",
+    "taxonomy_version": "varchar",
+    "evidence": "jsonb",
+}
+V06_CHECKS = {
+    "ck_job_matches_job_score",
+    "ck_job_matches_preference_score",
+    "ck_job_matches_job_coverage",
+    "ck_job_matches_preference_coverage",
+}
+
+
+def seed_v06_rows(engine: Engine) -> None:
+    """A V0.6 result computed from a fact sheet with an UNSPECIFIED requirement,
+    with an AI explanation."""
+    version = rows(engine, "SELECT id FROM candidate_profile_versions LIMIT 1")[0]["id"]
+    intelligence, match = uuid.uuid4(), uuid.uuid4()
+    execute(
+        engine,
+        "UPDATE job_intelligence SET is_current = false WHERE job_id = :job", job=GH_JOB,
+    )
+    execute(
+        engine,
+        "INSERT INTO job_intelligence (id, job_id, extractor_version, taxonomy_version, "
+        "input_hash, result_hash, facts) VALUES (:id, :job, 'job_extractor_v1', 'taxonomy_v1', "
+        ":hash, :hash, '{}'::jsonb)",
+        id=intelligence, job=GH_JOB, hash="e" * 64,
+    )
+    execute(
+        engine,
+        "INSERT INTO job_requirements (id, job_intelligence_id, kind, category, skill_key, "
+        "source_field, extraction_method, confidence) VALUES (gen_random_uuid(), :ji, "
+        "'UNSPECIFIED', 'SKILL', 'python', 'description', 'skill_taxonomy', 'HIGH')",
+        ji=intelligence,
+    )
+    execute(
+        engine,
+        "UPDATE job_matches SET is_current = false WHERE user_id = :user", user=USER_ID,
+    )
+    execute(
+        engine,
+        "INSERT INTO job_matches (id, user_id, job_id, candidate_profile_version_id, "
+        "job_intelligence_id, model_id, model_hash, score, coverage, verdict, criteria, caps, "
+        "job_score, preference_score, job_coverage, preference_coverage, taxonomy_version, "
+        "evidence) VALUES (:id, :user, :job, :version, :ji, 'matching_v1', :hash, 83, 0.8, "
+        "'STRONG', '[]'::jsonb, '[]'::jsonb, 87, 74, 0.9, 0.6, 'taxonomy_v1', "
+        "'{\"components\": []}'::jsonb)",
+        id=match, user=USER_ID, job=GH_JOB, version=version, ji=intelligence, hash="f" * 64,
+    )
+    execute(
+        engine,
+        "INSERT INTO job_match_explanations (id, job_match_id, prompt_version, ai_provider, "
+        "content) VALUES (gen_random_uuid(), :match, 'matching_explanation_v1', 'fake', "
+        "'{\"summary\": \"s\"}'::jsonb)",
+        match=match,
+    )
+
+
+def test_v05_data_survives_v06_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    command.upgrade(config, V03)
+    seed_v03(migration_db)
+    command.upgrade(config, V04)
+    seed_v04_profile_data(migration_db)
+    command.upgrade(config, V05)
+    seed_v05_rows(migration_db)
+
+    v05_tables = user_tables(migration_db)
+    data_before = data_fingerprints(migration_db, v05_tables)
+    schema_before = schema_fingerprint(migration_db, v05_tables)
+    enums_before = enum_values(migration_db)
+
+    # V0.5 -> V0.6: additive only.
+    command.upgrade(config, V06)
+    assert user_tables(migration_db) == v05_tables | {"job_match_explanations"}
+    unchanged = v05_tables - {"job_matches"}
+    assert data_fingerprints(migration_db, unchanged) == {
+        t: v for t, v in data_before.items() if t in unchanged
+    }
+    columns = {
+        r["column_name"]: r["udt_name"]
+        for r in rows(
+            migration_db,
+            "SELECT column_name, udt_name FROM information_schema.columns "
+            "WHERE table_name = 'job_matches'",
+        )
+    }
+    for name, udt in V06_MATCH_COLUMNS.items():
+        assert columns[name] == udt, name
+    checks = {
+        r["conname"]
+        for r in rows(
+            migration_db,
+            "SELECT conname FROM pg_constraint WHERE conrelid = 'job_matches'::regclass",
+        )
+    }
+    assert V06_CHECKS <= checks
+    enums = enum_values(migration_db)
+    assert enums["job_requirement_kind"] == ["REQUIRED", "PREFERRED", "CONTEXTUAL", "UNSPECIFIED"]
+    assert {k: v for k, v in enums.items() if k != "job_requirement_kind"} == {
+        k: v for k, v in enums_before.items() if k != "job_requirement_kind"
+    }
+    # The pre-existing V0.5 result is untouched; its new fields are empty.
+    assert rows(
+        migration_db,
+        "SELECT model_id, job_score, preference_score, taxonomy_version, evidence "
+        "FROM job_matches",
+    ) == [{"model_id": "match_v1", "job_score": None, "preference_score": None,
+           "taxonomy_version": None, "evidence": {}}]
+    seed_v06_rows(migration_db)
+
+    # V0.6 -> V0.5: exactly the V0.5 schema and data again.
+    command.downgrade(config, V05)
+    assert user_tables(migration_db) == v05_tables
+    assert schema_fingerprint(migration_db, v05_tables) == schema_before
+    assert enum_values(migration_db) == enums_before
+    # The V0.6-derived fact sheet that used UNSPECIFIED (and its match) is
+    # gone; every V0.5 row is still there.
+    remaining = rows(migration_db, "SELECT model_id FROM job_matches")
+    assert remaining == [{"model_id": "match_v1"}]
+    assert rows(migration_db, "SELECT count(*) AS n FROM job_intelligence") == [{"n": 1}]
+    other_tables = v05_tables - {"job_matches", "job_intelligence", "job_requirements"}
+    assert data_fingerprints(migration_db, other_tables) == {
+        t: v for t, v in data_before.items() if t in other_tables
+    }
+
+    # V0.5 -> V0.6 again.
+    command.upgrade(config, "head")
+    assert "job_match_explanations" in user_tables(migration_db)
+    assert enum_values(migration_db)["job_requirement_kind"][-1] == "UNSPECIFIED"

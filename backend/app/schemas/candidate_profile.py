@@ -96,6 +96,7 @@ _EVIDENCE_REF = re.compile(
 )
 
 Title = Annotated[str, Field(min_length=1, max_length=255)]
+IndustryName = Annotated[str, Field(min_length=1, max_length=255)]
 Years = Annotated[float, Field(ge=0, le=80)]
 Money = Annotated[Decimal, Field(ge=0, le=Decimal("10000000"))]
 
@@ -136,6 +137,13 @@ class RoleSection(DocumentModel):
     years_of_experience: SourcedValue[Years] | None = None
     # Job Preferences: user-declared only.
     target_titles: list[TargetTitle] = Field(default_factory=list)
+    # V0.6 (additive): earlier roles from the confirmed Resume Profile's work
+    # history (resume-derived, each with its evidence_ref) ...
+    previous_titles: list[SourcedValue[Title]] = Field(default_factory=list)
+    # ... and the industries the user has worked in (user-declared,
+    # `user_industries`). Not the industries they *want* -- see
+    # `Preferences.industries`.
+    industries: list[IndustryName] = Field(default_factory=list)
 
     @field_validator("target_titles")
     @classmethod
@@ -144,12 +152,30 @@ class RoleSection(DocumentModel):
             raise ValueError("target_titles must be unique")
         return values
 
+    @field_validator("previous_titles")
+    @classmethod
+    def _unique_previous_titles(
+        cls, values: list[SourcedValue[str]]
+    ) -> list[SourcedValue[str]]:
+        if len({v.value.casefold() for v in values}) != len(values):
+            raise ValueError("previous_titles must be unique")
+        return values
+
+    @field_validator("industries")
+    @classmethod
+    def _unique_industries(cls, values: list[str]) -> list[str]:
+        if len({v.casefold() for v in values}) != len(values):
+            raise ValueError("industries must be unique")
+        return values
+
     def is_empty(self) -> bool:
         return (
             self.current_title is None
             and self.seniority_level is None
             and self.years_of_experience is None
             and not self.target_titles
+            and not self.previous_titles
+            and not self.industries
         )
 
 
@@ -204,11 +230,21 @@ class Preferences(DocumentModel):
     minimum_salary: Money | None = None
     desired_salary: Money | None = None
     currency: CurrencyCode | None = None
+    # V0.6 (additive): industries the user wants to work in
+    # (`job_preference_industries`).
+    industries: list[IndustryName] = Field(default_factory=list)
 
     @field_validator("work_models", "employment_types")
     @classmethod
     def _dedupe(cls, values: list[Any]) -> list[Any]:
         return unique_in_order(values)
+
+    @field_validator("industries")
+    @classmethod
+    def _unique_industries(cls, values: list[str]) -> list[str]:
+        if len({v.casefold() for v in values}) != len(values):
+            raise ValueError("industries must be unique")
+        return values
 
     @field_validator("minimum_salary", "desired_salary")
     @classmethod
@@ -232,6 +268,7 @@ class Preferences(DocumentModel):
             and self.minimum_salary is None
             and self.desired_salary is None
             and self.currency is None
+            and not self.industries
         )
 
 
@@ -363,6 +400,7 @@ class CandidateProfileDocument(DocumentModel):
             self.role.seniority_level,
             self.role.years_of_experience,
             self.location_and_mobility.current_location,
+            *self.role.previous_titles,
             *self.skills,
             *self.languages,
             *self.credentials.education,
@@ -372,6 +410,7 @@ class CandidateProfileDocument(DocumentModel):
         # These are user-declared by definition.
         if (
             self.role.target_titles
+            or self.role.industries
             or self.location_and_mobility.preferred_locations
             or self.location_and_mobility.relocation is not None
             or self.location_and_mobility.travel is not None

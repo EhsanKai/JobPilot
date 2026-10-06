@@ -149,6 +149,9 @@ def job_facts() -> dict[str, Any]:
         },
         "document_language": {"value": "de", "source_field": "description",
                               "extraction_method": "stopwords", "confidence": "high"},
+        # V0.6
+        "title": {"value": "Senior SAP ABAP Developer", "source_field": "title", **provenance},
+        "industry": {"value": "Finance", "source_field": "industry", **provenance},
     }
 
 

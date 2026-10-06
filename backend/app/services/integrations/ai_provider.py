@@ -6,8 +6,10 @@ As of V0.2 the real, provider-agnostic AI layer lives in `app.ai`
 `app.services.resume_intelligence.parser.ResumeParser`.
 
 The interfaces below are still placeholders for later releases and are
-intentionally not implemented: no job matching or document generation
-exists yet.
+intentionally not implemented. Job matching (V0.6) does not use
+`JobMatcher`: its score is deterministic (`app.services.matching`), and AI
+is only used to explain a finished result. No document generation exists
+yet.
 """
 
 from abc import ABC, abstractmethod

@@ -30,6 +30,10 @@ class RequirementKind(str, enum.Enum):
     # Mentioned by the posting (e.g. the team's stack) without being asked
     # of the candidate.
     CONTEXTUAL = "contextual"
+    # Asked of the candidate (e.g. listed under "Qualifications"), but the
+    # posting doesn't say whether it is required or preferred (V0.6). Never
+    # guessed as either.
+    UNSPECIFIED = "unspecified"
 
 
 class RequirementCategory(str, enum.Enum):

@@ -96,6 +96,11 @@ class JobFacts(DocumentModel):
 
     schema_version: str = Field(default=JOB_FACTS_SCHEMA_VERSION, min_length=1, max_length=50)
 
+    # V0.6 (additive): the canonical title and industry the extractor read,
+    # so a match result can be reproduced from its fact sheet alone.
+    title: Fact[Annotated[str, Field(min_length=1, max_length=500)]] | None = None
+    industry: Fact[Annotated[str, Field(min_length=1, max_length=255)]] | None = None
+
     seniority: Fact[SeniorityLevel] | None = None
     employment_type: Fact[EmploymentTypeValue] | None = None
     work_model: Fact[RemotePreference] | None = None
