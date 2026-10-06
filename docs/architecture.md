@@ -1,9 +1,11 @@
-# JobPilot Architecture — V0 to V0.4
+# JobPilot Architecture — V0 to V0.5.0
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.4 is summarized in §14 and documented
+to build on them without a rewrite. The V0.5.0 matching data foundation is
+summarized in §15 and documented in full in
+[`candidate-job-intelligence.md`](candidate-job-intelligence.md). V0.4 is summarized in §14 and documented
 in full in [`job-intelligence.md`](job-intelligence.md). V0.3 is summarized
 in §13 and documented in full in
 [`job-discovery.md`](job-discovery.md). V0.2 is
@@ -452,3 +454,35 @@ RawJob ─► JobNormalizer ─► Source Posting ─► identity resolution ─
   taken in sorted order.
 - **Freshness without deletion**: postings become inactive only when a
   complete board listing no longer contains them; `stale` is computed.
+
+## 15. V0.5.0 — Candidate & Job Intelligence data model
+
+Full documentation: [`candidate-job-intelligence.md`](candidate-job-intelligence.md).
+
+V0.5.0 adds only the data foundation for matching — no snapshot building,
+extraction, scoring, API or UI yet (later V0.5 phases).
+
+```
+users ──< candidate_profile_versions ─┐
+  └─────────────< job_matches >───────┤   result = f(snapshot, fact sheet, model_id + model_hash)
+jobs ──< job_intelligence ────────────┘
+               └──< job_requirements
+```
+
+- **Snapshots, not live profiles.** `candidate_profile_versions` holds
+  immutable, content-hashed snapshots: a read model of the V0.1 tables (the
+  editable source of truth) plus the confirmed Resume Profile, each value
+  tagged with its origin; user-declared values win, nothing is written back.
+  Personal attributes (name, contact data, nationality, ...) cannot be
+  represented; work authorization is user-declared ISO country codes only,
+  empty meaning unknown.
+- **Derived job facts beside canonical jobs.** `job_intelligence` versions
+  (`extractor_version`, `taxonomy_version`, `input_hash`, `result_hash`,
+  one `is_current`) and their `job_requirements` never alter `jobs`.
+- **Reproducible results.** `job_matches` pins the snapshot, the fact-sheet
+  version and the model hash; composite foreign keys keep users and jobs
+  consistent, and referenced versions can't be deleted on their own.
+- **Write-once rows.** `ImmutableMixin` rejects ORM updates except pointer
+  columns (`is_current`, `verified_at`); JSONB is validated by Pydantic
+  documents on assignment.
+- **One create-only migration** (`a56b296b53a5`): no V0.4 table is altered.

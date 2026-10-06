@@ -143,6 +143,13 @@ sources are the same real-world job. See
 V0.4 deliberately contains **no** AI matching, match scores or LLM calls —
 that is V0.5.
 
+V0.5.0 adds the **data foundation** for matching — and nothing user-facing
+yet: immutable candidate profile snapshots, versioned job fact sheets with
+their requirements, and reproducible match-result records (four new tables,
+one create-only migration). Snapshot building, requirement extraction,
+scoring, matching APIs and UI are later V0.5 phases. See
+[`docs/candidate-job-intelligence.md`](docs/candidate-job-intelligence.md).
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -401,8 +408,8 @@ V0     Foundation                  ✅
 V0.1   User Profile & Job Preference Intelligence   ✅
 V0.2   Resume Intelligence         ✅
 V0.3   Job Discovery               ✅
-V0.4   Job Intelligence & Cross-Source Normalization   ✅ (current)
-V0.5   AI Matching
+V0.4   Job Intelligence & Cross-Source Normalization   ✅
+V0.5   AI Matching                 (in progress: V0.5.0 data model ✅)
 V0.6   Job Dashboard / MVP
 V0.7   Application Workspace
 V0.8   Tailored CV + Anschreiben
