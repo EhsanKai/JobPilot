@@ -118,6 +118,8 @@ class BoardJobSource(JobSource):
                 continue
             result.jobs.extend(outcome.jobs[: self._max_jobs_per_board])
             result.unreadable_items += outcome.unreadable_items
+            if outcome.unreadable_items == 0 and len(outcome.jobs) < self._max_jobs_per_board:
+                result.complete_targets.append(board.key)
         return result
 
     @abstractmethod

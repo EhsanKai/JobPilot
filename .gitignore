@@ -24,6 +24,10 @@ next-env.d.ts
 .turbo/
 *.tsbuildinfo
 
+# Playwright E2E output
+frontend/test-results/
+frontend/playwright-report/
+
 # Build artifacts
 dist/
 build/

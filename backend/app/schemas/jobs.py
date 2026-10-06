@@ -1,4 +1,4 @@
-"""Request/response schemas for Job Discovery (V0.3)."""
+"""Request/response schemas for Job Discovery (V0.3) and Job Intelligence (V0.4)."""
 
 import enum
 import uuid
@@ -186,6 +186,15 @@ class SourceIssueRead(BaseModel):
 
 
 class DiscoveryCounts(BaseModel):
+    """Counters of a discovery run, per source and in total.
+
+    Per source: fetched = invalid + duplicates + filtered_out + beyond_limit
+    + (created + merged + updated + unchanged). The last four count source
+    *postings* stored for the user. `discovered` counts distinct canonical
+    *jobs*; the run total is not the sum of the sources' values when sources
+    share jobs.
+    """
+
     #: Postings received from the source.
     fetched: int = 0
     #: Postings rejected by validation (e.g. missing title or URL).
@@ -194,15 +203,29 @@ class DiscoveryCounts(BaseModel):
     filtered_out: int = 0
     #: Matching postings beyond the requested page/limit.
     beyond_limit: int = 0
-    #: The same posting returned more than once in one run.
+    #: The same posting (same source, same id) returned more than once in one run.
     duplicates: int = 0
-    #: New canonical jobs.
+    #: New postings that became a new canonical job (nothing matched).
     created: int = 0
-    #: Existing jobs whose content changed.
+    #: New postings attached to an existing canonical job found by another
+    #: source (EXACT or HIGH_CONFIDENCE match).
+    merged: int = 0
+    #: Known postings whose content changed (the job was refreshed).
     updated: int = 0
-    #: Existing jobs seen again without changes.
+    #: Known postings seen again without changes.
     unchanged: int = 0
-    #: Matching jobs stored for the user: created + updated + unchanged.
+    #: Stored postings whose canonical job is listed by two or more sources
+    #: (whether merged in this run or earlier).
+    cross_source_matches: int = 0
+    #: New postings that resembled an existing job (POSSIBLE_MATCH) but were
+    #: deliberately kept as a separate job. Never merged automatically.
+    possible_matches: int = 0
+    #: Postings fetched but not stored: invalid + duplicates + filtered_out +
+    #: beyond_limit.
+    skipped: int = 0
+    #: Problems reported by the source (failed boards, unreachable source).
+    error_count: int = 0
+    #: Distinct canonical jobs stored for the user.
     discovered: int = 0
 
 
@@ -252,6 +275,48 @@ class JobSourceRead(BaseModel):
 # --- Jobs --------------------------------------------------------------------------
 
 
+class PostingStatus(str, enum.Enum):
+    #: Listed by its source within the freshness window.
+    ACTIVE = "active"
+    #: Not seen by any discovery run for a while; may or may not still be open.
+    STALE = "stale"
+    #: Its source's complete board listing no longer contains it.
+    INACTIVE = "inactive"
+
+
+class JobSourcePostingRead(BaseModel):
+    """Where a job was found: one source posting. Source-specific, as the
+    source stated it. Raw payloads and matching internals are never exposed."""
+
+    id: uuid.UUID
+    source: str
+    source_job_id: str | None
+    #: Board/site within the source (e.g. a Greenhouse board token).
+    source_company_key: str | None
+    #: The posting URL exactly as the source returned it (falls back to the
+    #: canonical URL when the source gave none).
+    original_url: str
+    #: The same URL with tracking parameters and fragment removed.
+    canonical_url: str
+    apply_url: str | None
+    #: Title, company and location as written by this source.
+    title: str
+    company_name: str
+    location: str | None
+    posted_at: datetime | None
+    first_seen_at: datetime
+    last_seen_at: datetime
+    is_active: bool
+    status: PostingStatus
+    #: The posting JobPilot's canonical data comes from and that application
+    #: automation will use.
+    is_preferred: bool
+    #: Whether your latest finished discovery run received this posting from
+    #: its source. None if that run didn't query this source (or you have no
+    #: finished run).
+    seen_in_latest_run: bool | None
+
+
 class JobSummaryRead(BaseModel):
     """A job as shown in the list. The canonical job plus this user's state."""
 
@@ -267,7 +332,14 @@ class JobSummaryRead(BaseModel):
     salary_currency: str | None
     salary_period: SalaryPeriod | None
     technologies: list[str]
+    #: Source of the preferred posting.
     source: str
+    #: Every source the job was found on, preferred first (V0.4).
+    sources: list[str]
+    #: Number of source postings (one per source today).
+    source_count: int
+    #: False when no source lists the job any more.
+    is_active: bool
     canonical_url: str
     posted_at: datetime | None
     discovered_at: datetime
@@ -278,11 +350,18 @@ class JobSummaryRead(BaseModel):
 class JobDetailRead(JobSummaryRead):
     locations: list[str]
     country: str | None
+    #: Canonical city from JobPilot's location vocabulary (e.g. "Cologne"
+    #: for "Köln"), when recognized.
+    city: str | None
     department: str | None
     industry: str | None
     description: str | None
     requirements: list[str]
     responsibilities: list[str]
+    #: Salary as the posting wrote it (also when too ambiguous to structure).
+    salary_text: str | None
+    # Identity of the preferred posting (kept for V0.3 compatibility; see
+    # `source_postings` for all of them).
     source_job_id: str | None
     source_company_key: str | None
     source_url: str | None
@@ -290,6 +369,8 @@ class JobDetailRead(JobSummaryRead):
     source_updated_at: datetime | None
     last_seen_at: datetime
     first_discovered_by_you_at: datetime | None
+    preferred_source_posting_id: uuid.UUID | None
+    source_postings: list[JobSourcePostingRead]
     created_at: datetime
     updated_at: datetime
 

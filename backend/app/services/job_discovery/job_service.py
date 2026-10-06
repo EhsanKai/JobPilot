@@ -3,22 +3,39 @@
 Visibility: a user sees exactly the jobs they have a `UserJob` row for --
 jobs their own discovery runs returned, or that they saved. Anything else is
 a 404 (never 403), so job ids can't be probed across users.
+
+Canonical job data and source postings are global; the only user-specific
+data returned is the user's own `UserJob` state and whether *their* latest
+discovery run saw each posting. Raw source payloads and matching internals
+are never returned.
 """
 
 import math
 import uuid
-from datetime import UTC, date, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Select, String, UnaryExpression, and_, cast, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.core.config import settings
 from app.core.errors import NotFoundError
+from app.models.discovery_run import DiscoveryRun, DiscoveryRunStatus
 from app.models.job import Job
 from app.models.job_preferences import EmploymentTypeValue, RemotePreference
+from app.models.job_source_posting import JobSourcePosting
 from app.models.user import User
 from app.models.user_job import UserJob
-from app.schemas.jobs import JobDetailRead, JobListResponse, JobSort, JobSummaryRead
+from app.schemas.jobs import (
+    JobDetailRead,
+    JobListResponse,
+    JobSort,
+    JobSourcePostingRead,
+    JobSummaryRead,
+    PostingStatus,
+)
+from app.services.job_discovery.deduplication.merger import order_postings
 
 
 def _like(term: str) -> str:
@@ -30,7 +47,25 @@ def _terms(value: str | None) -> list[str]:
     return [term.strip() for term in (value or "").split(",") if term.strip()][:20]
 
 
+def posting_status(posting: JobSourcePosting, *, now: datetime | None = None) -> PostingStatus:
+    if not posting.is_active:
+        return PostingStatus.INACTIVE
+    now = now or datetime.now(UTC)
+    if now - posting.last_seen_at > timedelta(days=settings.JOB_POSTING_STALE_DAYS):
+        return PostingStatus.STALE
+    return PostingStatus.ACTIVE
+
+
+def _ordered_postings(job: Job) -> list[JobSourcePosting]:
+    """Preferred posting first, then the others in preference order."""
+    postings = order_postings(list(job.source_postings))
+    preferred = [p for p in postings if p.id == job.preferred_source_posting_id]
+    return preferred + [p for p in postings if p.id != job.preferred_source_posting_id]
+
+
 def to_summary(job: Job, user_job: UserJob) -> JobSummaryRead:
+    postings = _ordered_postings(job)
+    sources = list(dict.fromkeys(p.source for p in postings))
     return JobSummaryRead(
         id=job.id,
         title=job.title,
@@ -44,7 +79,10 @@ def to_summary(job: Job, user_job: UserJob) -> JobSummaryRead:
         salary_currency=job.salary_currency,
         salary_period=job.salary_period,
         technologies=list(job.technologies or []),
-        source=job.source,
+        source=sources[0] if sources else "unknown",
+        sources=sources,
+        source_count=len(postings),
+        is_active=any(p.is_active for p in postings),
         canonical_url=job.canonical_url,
         posted_at=job.posted_at,
         discovered_at=job.discovered_at,
@@ -53,26 +91,100 @@ def to_summary(job: Job, user_job: UserJob) -> JobSummaryRead:
     )
 
 
-def to_detail(job: Job, user_job: UserJob) -> JobDetailRead:
+@dataclass(frozen=True)
+class RunCoverage:
+    """Which sources the user's latest finished discovery run received
+    data from, and when it started."""
+
+    started_at: datetime
+    sources: frozenset[str]
+
+
+def latest_run_coverage(db: Session, user: User) -> RunCoverage | None:
+    run = db.execute(
+        select(DiscoveryRun)
+        .where(
+            DiscoveryRun.user_id == user.id,
+            DiscoveryRun.status.in_([DiscoveryRunStatus.COMPLETED, DiscoveryRunStatus.PARTIAL]),
+        )
+        .order_by(DiscoveryRun.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if run is None or run.started_at is None or not run.summary:
+        return None
+    sources = frozenset(
+        entry["source"]
+        for entry in run.summary.get("sources", [])
+        if isinstance(entry, dict) and entry.get("status") != "failed" and "source" in entry
+    )
+    return RunCoverage(started_at=run.started_at, sources=sources)
+
+
+def to_posting_read(
+    posting: JobSourcePosting, job: Job, coverage: RunCoverage | None
+) -> JobSourcePostingRead:
+    seen: bool | None = None
+    if coverage is not None and posting.source in coverage.sources:
+        seen = posting.last_seen_at >= coverage.started_at
+    return JobSourcePostingRead(
+        id=posting.id,
+        source=posting.source,
+        source_job_id=posting.source_job_id,
+        source_company_key=posting.source_company_key,
+        original_url=posting.source_url or posting.canonical_source_url,
+        canonical_url=posting.canonical_source_url,
+        apply_url=posting.apply_url,
+        title=posting.title,
+        company_name=posting.company_name,
+        location=posting.location,
+        posted_at=posting.posted_at,
+        first_seen_at=posting.first_seen_at,
+        last_seen_at=posting.last_seen_at,
+        is_active=posting.is_active,
+        status=posting_status(posting),
+        is_preferred=posting.id == job.preferred_source_posting_id,
+        seen_in_latest_run=seen,
+    )
+
+
+def to_detail(
+    job: Job, user_job: UserJob, coverage: RunCoverage | None = None
+) -> JobDetailRead:
+    postings = _ordered_postings(job)
+    preferred = postings[0] if postings else None
     return JobDetailRead(
         **to_summary(job, user_job).model_dump(),
         locations=list(job.locations or []),
         country=job.country,
+        city=job.city,
         department=job.department,
         industry=job.industry,
         description=job.description,
         requirements=list(job.requirements or []),
         responsibilities=list(job.responsibilities or []),
-        source_job_id=job.source_job_id,
-        source_company_key=job.source_company_key,
-        source_url=job.source_url,
+        salary_text=job.salary_text,
+        source_job_id=preferred.source_job_id if preferred else None,
+        source_company_key=preferred.source_company_key if preferred else None,
+        source_url=preferred.source_url if preferred else None,
         apply_url=job.apply_url,
-        source_updated_at=job.source_updated_at,
+        source_updated_at=preferred.source_updated_at if preferred else None,
         last_seen_at=job.last_seen_at,
         first_discovered_by_you_at=user_job.first_discovered_at,
+        preferred_source_posting_id=job.preferred_source_posting_id,
+        source_postings=[to_posting_read(p, job, coverage) for p in postings],
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
+
+
+def detail(db: Session, user: User, job: Job, user_job: UserJob) -> JobDetailRead:
+    return to_detail(job, user_job, latest_run_coverage(db, user))
+
+
+def source_postings(db: Session, user: User, job_id: uuid.UUID) -> list[JobSourcePostingRead]:
+    job, _ = get_visible_job(db, user, job_id)
+    coverage = latest_run_coverage(db, user)
+    return [to_posting_read(p, job, coverage) for p in _ordered_postings(job)]
 
 
 def _visible(user: User) -> Select[tuple[Job, UserJob]]:
@@ -80,6 +192,7 @@ def _visible(user: User) -> Select[tuple[Job, UserJob]]:
     return (
         select(Job, UserJob)
         .join(UserJob, and_(UserJob.job_id == Job.id, UserJob.user_id == user.id))
+        .options(selectinload(Job.source_postings))
         .execution_options(populate_existing=True)
     )
 
@@ -101,7 +214,9 @@ def list_jobs(
 ) -> JobListResponse:
     query = _visible(user)
     if sources:
-        query = query.where(Job.source.in_(sources))
+        # A job matches when *any* of its postings is from one of the
+        # sources, so multi-source jobs stay findable under each source.
+        query = query.where(Job.source_postings.any(JobSourcePosting.source.in_(sources)))
     # Comma-separated terms are OR'ed, as in discovery criteria.
     if terms := _terms(q):
         query = query.where(

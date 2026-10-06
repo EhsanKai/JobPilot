@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.discovery_run import DiscoveryRun, DiscoveryRunStatus
 from app.models.job import Job
+from app.models.job_source_posting import JobSourcePosting
 from app.models.user_job import UserJob
 from app.services.job_discovery.sources.greenhouse import API_HOST as GREENHOUSE_HOST
 from tests.job_helpers import LEVER_HOST, FakeJobBoards, load_fixture
@@ -140,24 +141,34 @@ def test_discovered_jobs_are_normalized_and_keep_source_metadata(
     client: TestClient, auth: dict[str, str], db_session: Session
 ) -> None:
     discover(client, auth)
-    job = db_session.execute(
-        select(Job).where(Job.source == "greenhouse", Job.source_job_id == "4012345")
+    # Since V0.4 source identity and provenance live on the source posting;
+    # the canonical Job carries the normalized content.
+    posting = db_session.execute(
+        select(JobSourcePosting).where(
+            JobSourcePosting.source == "greenhouse", JobSourcePosting.source_job_id == "4012345"
+        )
     ).scalar_one()
+    job = db_session.get(Job, posting.job_id)
+    assert job is not None
+    assert job.preferred_source_posting_id == posting.id
     assert job.title == "Senior Backend Engineer (Python)"
     assert job.company_name == "Acme GmbH"
-    assert job.dedup_key == "greenhouse:id:4012345"
-    assert job.source_company_key == "acme"
+    assert posting.dedup_key == "greenhouse:id:4012345"
+    assert posting.source_company_key == "acme"
     assert job.canonical_url == "https://job-boards.greenhouse.io/acme/jobs/4012345"
-    assert job.source_url is not None and "utm_source=linkedin" in job.source_url
+    assert posting.canonical_source_url == job.canonical_url
+    assert posting.source_url is not None and "utm_source=linkedin" in posting.source_url
     assert job.employment_type is not None and job.employment_type.value == "full_time"
     assert job.seniority is not None and job.seniority.value == "senior"
     assert job.salary_min == 70000 and job.salary_currency == "EUR"
     assert set(job.technologies) >= {"Python", "PostgreSQL", "Kubernetes", "AWS"}
     assert job.posted_at == datetime(2026, 9, 20, 8, tzinfo=UTC)
-    assert job.raw_data is not None and job.raw_data["id"] == 4012345
-    assert job.content_hash and job.normalizer_version == "job_normalizer_v1"
+    assert posting.raw_data is not None and posting.raw_data["id"] == 4012345
+    assert posting.content_hash and posting.normalizer_version == "job_normalizer_v2"
 
-    designer = db_session.execute(select(Job).where(Job.source_job_id == "4012346")).scalar_one()
+    designer = db_session.execute(
+        select(Job).join(Job.source_postings).where(JobSourcePosting.source_job_id == "4012346")
+    ).scalar_one()
     # Required query parameter kept, fragment dropped.
     assert designer.canonical_url == "https://acme.example.com/careers?gh_jid=4012346"
     assert designer.work_model is not None and designer.work_model.value == "remote"
@@ -356,7 +367,8 @@ def test_repeated_discovery_never_duplicates_and_preserves_identity(
 ) -> None:
     discover(client, auth)
     before = {
-        j.dedup_key: (j.id, j.discovered_at, j.updated_at) for j in db_session.scalars(select(Job))
+        p.dedup_key: (j.id, j.discovered_at, j.updated_at)
+        for p, j in db_session.execute(select(JobSourcePosting, Job).join(JobSourcePosting.job))
     }
     job_id = list_jobs(client, auth)["items"][0]["id"]
     client.put(f"/api/v1/jobs/{job_id}/save", headers=auth)
@@ -367,7 +379,8 @@ def test_repeated_discovery_never_duplicates_and_preserves_identity(
     assert summary["unchanged"] == 5
     db_session.expire_all()
     after = {
-        j.dedup_key: (j.id, j.discovered_at, j.updated_at) for j in db_session.scalars(select(Job))
+        p.dedup_key: (j.id, j.discovered_at, j.updated_at)
+        for p, j in db_session.execute(select(JobSourcePosting, Job).join(JobSourcePosting.job))
     }
     assert after.keys() == before.keys()
     for key, (job_id_before, discovered_before, updated_before) in before.items():
@@ -401,10 +414,14 @@ def test_refresh_updates_changed_jobs_and_adds_new_ones(
     summary = discover(client, auth, {"sources": ["greenhouse"]})["summary"]
     assert (summary["created"], summary["updated"], summary["unchanged"]) == (1, 1, 1)
     db_session.expire_all()
-    updated = db_session.execute(select(Job).where(Job.source_job_id == "4012345")).scalar_one()
+    updated = db_session.execute(
+        select(Job).join(Job.source_postings).where(JobSourcePosting.source_job_id == "4012345")
+    ).scalar_one()
     assert updated.title == "Staff Backend Engineer (Python)"
     assert updated.seniority is not None and updated.seniority.value == "lead"
-    assert db_session.execute(select(Job).where(Job.source_job_id == "4012346")).scalar_one()
+    assert db_session.execute(
+        select(Job).join(Job.source_postings).where(JobSourcePosting.source_job_id == "4012346")
+    ).scalar_one()
     assert job_count(db_session) == 6
 
 
@@ -436,9 +453,10 @@ def test_jobs_without_source_id_deduplicate_by_canonical_url(
     # Same posting (canonical URL identical): never a second row. The raw
     # source_url changed, so it counts as an update.
     assert (summary["created"], summary["updated"]) == (0, 1)
-    job = db_session.execute(select(Job)).scalar_one()
-    assert job.source_job_id is None
-    assert job.dedup_key.startswith("greenhouse:url:")
+    assert job_count(db_session) == 1
+    posting = db_session.execute(select(JobSourcePosting)).scalar_one()
+    assert posting.source_job_id is None
+    assert posting.dedup_key.startswith("greenhouse:url:")
 
 
 # --- Listing, detail, saving -------------------------------------------------------------------

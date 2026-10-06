@@ -16,6 +16,7 @@ from app.schemas.jobs import (
     JobListResponse,
     JobSearchCriteria,
     JobSort,
+    JobSourcePostingRead,
     JobSourceRead,
 )
 from app.services.job_discovery import job_service, run_service
@@ -121,7 +122,9 @@ def list_jobs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobListResponse:
-    """Jobs visible to the user (found by their discovery runs, or saved)."""
+    """Jobs visible to the user (found by their discovery runs, or saved).
+    One entry per canonical job, however many sources list it; `source`
+    filters match a job when any of its postings is from that source."""
     return job_service.list_jobs(
         db,
         current_user,
@@ -144,8 +147,21 @@ def get_job(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobDetailRead:
+    """The canonical job, your saved state, and every source posting it was
+    found on (`source_postings`, preferred first)."""
     job, user_job = job_service.get_visible_job(db, current_user, job_id)
-    return job_service.to_detail(job, user_job)
+    return job_service.detail(db, current_user, job, user_job)
+
+
+@router.get("/{job_id}/sources", response_model=list[JobSourcePostingRead])
+def get_job_sources(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[JobSourcePostingRead]:
+    """Where the job was found: one entry per source posting, preferred
+    first, with the original URL and freshness. Never raw source data."""
+    return job_service.source_postings(db, current_user, job_id)
 
 
 @router.put("/{job_id}/save", response_model=JobDetailRead)
@@ -155,7 +171,7 @@ def save_job(
     db: Session = Depends(get_db),
 ) -> JobDetailRead:
     job, user_job = job_service.set_saved(db, current_user, job_id, saved=True)
-    return job_service.to_detail(job, user_job)
+    return job_service.detail(db, current_user, job, user_job)
 
 
 @router.delete("/{job_id}/save", response_model=JobDetailRead)
@@ -165,4 +181,4 @@ def unsave_job(
     db: Session = Depends(get_db),
 ) -> JobDetailRead:
     job, user_job = job_service.set_saved(db, current_user, job_id, saved=False)
-    return job_service.to_detail(job, user_job)
+    return job_service.detail(db, current_user, job, user_job)

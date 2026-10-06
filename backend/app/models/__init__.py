@@ -16,6 +16,7 @@ from app.models.job_preferences import (
     RemotePreference,
     TravelWillingness,
 )
+from app.models.job_source_posting import JobSourcePosting
 from app.models.language import Language, LanguageProficiency, UserLanguage
 from app.models.professional_profile import ProfessionalProfile, SeniorityLevel
 from app.models.resume import Resume, ResumeStatus
@@ -57,6 +58,7 @@ __all__ = [
     "ResumeProfileStatus",
     "Job",
     "SalaryPeriod",
+    "JobSourcePosting",
     "UserJob",
     "DiscoveryRun",
     "DiscoveryRunStatus",

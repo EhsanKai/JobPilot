@@ -134,3 +134,120 @@ def make_registry(
     registry.register(greenhouse_source(boards, greenhouse), enabled="greenhouse" in enabled)
     registry.register(lever_source(boards, lever), enabled="lever" in enabled)
     return registry
+
+
+# --- Cross-source scenarios (V0.4) ----------------------------------------------------
+# The same vacancy as Greenhouse and Lever would each publish it: different
+# ids, URLs, HTML structure and location spelling, same text.
+
+SAP_INTRO = (
+    "Example GmbH builds SAP solutions for logistics and manufacturing customers across "
+    "Europe. Our Cologne team modernizes core ERP processes and we are looking for an "
+    "experienced developer who enjoys clean code, close collaboration with consultants "
+    "and long term ownership of business critical systems."
+)
+SAP_RESPONSIBILITIES = (
+    "Design, build and maintain ABAP developments in SAP S/4HANA",
+    "Translate business requirements into robust technical solutions with our consultants",
+    "Review code and mentor junior developers in modern ABAP practices",
+)
+SAP_REQUIREMENTS = (
+    "At least five years of experience with ABAP and ABAP Objects",
+    "Experience with CDS views, OData services and SAP Fiori integration",
+    "Fluent German and good English communication skills",
+)
+OTHER_INTRO = (
+    "Example GmbH is growing its finance platform team. In this role you will focus on "
+    "payment processing, reconciliation reports and the integration of banking interfaces, "
+    "working closely with our accounting department on month end closing topics and "
+    "regulatory reporting requirements for international subsidiaries."
+)
+OTHER_RESPONSIBILITIES = (
+    "Develop interfaces to banks and payment service providers",
+    "Automate reconciliation and month end closing reports",
+    "Support audits and regulatory reporting for subsidiaries",
+)
+OTHER_REQUIREMENTS = (
+    "Background in financial accounting processes",
+    "Experience with electronic bank statements and payment formats",
+    "Structured way of working and attention to detail",
+)
+
+
+def _sections_html(intro: str, responsibilities: Iterable[str], requirements: Iterable[str]) -> str:
+    items = lambda values: "".join(f"<li>{v}</li>" for v in values)  # noqa: E731
+    return (
+        f"<p>{intro}</p><h3>What you'll do</h3><ul>{items(responsibilities)}</ul>"
+        f"<h3>What you bring</h3><ul>{items(requirements)}</ul>"
+    )
+
+
+def greenhouse_job(
+    job_id: int,
+    *,
+    title: str = "Senior SAP ABAP Developer",
+    location: str = "Cologne, Germany",
+    intro: str = SAP_INTRO,
+    responsibilities: Iterable[str] = SAP_RESPONSIBILITIES,
+    requirements: Iterable[str] = SAP_REQUIREMENTS,
+    url: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    import html
+
+    return {
+        "id": job_id,
+        "title": title,
+        "updated_at": "2026-10-01T10:00:00Z",
+        "first_published": "2026-09-30T08:00:00Z",
+        "location": {"name": location},
+        "absolute_url": url or f"https://job-boards.greenhouse.io/example/jobs/{job_id}",
+        "metadata": [{"name": "Employment Type", "value": "Full-time"}],
+        "content": html.escape(_sections_html(intro, responsibilities, requirements)),
+        **extra,
+    }
+
+
+def lever_posting(
+    posting_id: str,
+    *,
+    site: str = "example",
+    title: str = "Senior SAP ABAP Developer",
+    location: str = "Köln",
+    intro: str = SAP_INTRO,
+    responsibilities: Iterable[str] = SAP_RESPONSIBILITIES,
+    requirements: Iterable[str] = SAP_REQUIREMENTS,
+    commitment: str = "Full Time",
+    **extra: Any,
+) -> dict[str, Any]:
+    items = lambda values: "".join(f"<li>{v}</li>" for v in values)  # noqa: E731
+    return {
+        "id": posting_id,
+        "text": title,
+        "categories": {"location": location, "commitment": commitment, "allLocations": [location]},
+        "country": "DE",
+        "description": f"<div>{intro}</div>",
+        "lists": [
+            {"text": "What you'll do", "content": items(responsibilities)},
+            {"text": "What you bring", "content": items(requirements)},
+        ],
+        "hostedUrl": f"https://jobs.lever.co/{site}/{posting_id}",
+        "applyUrl": f"https://jobs.lever.co/{site}/{posting_id}/apply",
+        "workplaceType": "unspecified",
+        "createdAt": 1759219200000,
+        **extra,
+    }
+
+
+def cross_source_registry(
+    boards: FakeJobBoards,
+    *,
+    greenhouse_jobs: list[dict[str, Any]],
+    lever_postings: list[dict[str, Any]],
+    company: str = "Example GmbH",
+) -> JobSourceRegistry:
+    """Greenhouse board "example" and Lever site "example", both configured
+    with the same company display name."""
+    boards.greenhouse_board("example", jobs={"jobs": greenhouse_jobs}, board={"name": company})
+    boards.lever_site("example", postings=lever_postings)
+    return make_registry(boards, greenhouse=f"example:{company}", lever=f"example:{company}")

@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # A discovery run older than this is considered abandoned (e.g. the server
     # restarted mid-run) and no longer blocks a new run.
     JOB_DISCOVERY_STALE_MINUTES: int = 10
+    # Job Intelligence (V0.4): a source posting that no discovery run has
+    # received for this many days is reported as "stale". Nothing is deleted.
+    JOB_POSTING_STALE_DAYS: int = 14
 
     @property
     def cors_origins(self) -> list[str]:

@@ -115,6 +115,12 @@ class SourceSearchResult:
     #: Items in a response the adapter couldn't interpret at all (e.g. not a
     #: JSON object). Counted as invalid; never silently dropped.
     unreadable_items: int = 0
+    #: Boards/sites (`RawJob.source_company_key`) whose *complete* listing is
+    #: in `jobs`: read without error, nothing unreadable, not cut off by a
+    #: cap. Only for these may JobPilot conclude that a stored posting
+    #: missing from `jobs` is no longer listed (V0.4 freshness). Sources
+    #: that can't guarantee completeness leave it empty.
+    complete_targets: list[str] = field(default_factory=list)
 
 
 class JobSource(ABC):
