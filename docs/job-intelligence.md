@@ -43,6 +43,7 @@ Contents
 19. [Discovery statistics](#19-discovery-statistics)
 20. [API and UI](#20-api-and-ui)
 21. [Code map, tests, limitations](#21-code-map-tests-limitations)
+22. [V0.4.1 — Live source validation](#22-v041--live-source-validation)
 
 ---
 
@@ -637,3 +638,146 @@ Limitations (honest):
 - No manual merge/split UI; `POSSIBLE_MATCH` is reported, not reviewable yet.
 - Inactivation only works for sources that report complete board listings
   (both current ATS sources do).
+
+## 22. V0.4.1 — Live source validation
+
+V0.4.1 adds no product feature. It validates V0.4 against the real
+Greenhouse and Lever APIs and hardens the adapters.
+
+**Result: PASS** — after the environment's network policy was changed to
+allow the provider hosts, the real APIs were contacted from the same
+container the tests run in and 503 real postings went through the
+production pipeline. (The first attempt the same day was BLOCKED by the
+egress proxy, `403` on `CONNECT`, "no rule or allowlist entry allows host";
+both reports are kept in `docs/live-validation/`.)
+
+### Providers and boards (2026-10-06)
+
+| Provider | Host | Result |
+|---|---|---|
+| Greenhouse | `boards-api.greenhouse.io` | reachable; provider responses (CloudFront, `x-request-id`) |
+| Lever | `api.lever.co` | reachable; provider responses |
+| Lever EU | `api.eu.lever.co` | reachable; neither configured site lives there (provider `404 {"ok":false,"error":"Document not found"}`) |
+
+| Board | Result | Postings |
+|---|---|---|
+| Greenhouse `getyourguide` | 200 | 54 |
+| Greenhouse `hellofresh` | 200 | 411 |
+| Greenhouse `grover` | 200 | 3 |
+| Lever `netlight` (global) | 200 | 35 |
+| Lever `ppro` (global) | 200 `[]` — the site exists but has no published postings (a non-existent site returns 404) | 0 |
+
+Pipeline results: 503 postings fetched, 0 invalid, 0 retries, 503 canonical
+jobs, 503 source postings, 0 duplicate postings, 0 orphan jobs. A repeat run
+created/merged nothing (all `unchanged`), `first_seen_at` was stable and
+`last_seen_at` advanced for every posting. Every board was a complete
+listing; nothing was wrongly marked inactive. Inactivation on a real listing
+is covered by replaying the captured response with one stored posting
+removed (exactly that posting becomes inactive).
+
+### Real responses vs. V0.4 assumptions
+
+- **Greenhouse list responses include `company_name` and
+  `first_published`** (the adapter's docstring assumed single-job
+  responses only). Both were already used when present: company identity
+  is the posting's own `company_name`, posted dates are 100% populated.
+- Greenhouse adds fields the adapter ignores (`data_compliance`,
+  `application_deadline`, `ai_disclaimer`, `language`, `requisition_id`).
+  Metadata values are strings, lists, booleans or null; only strings are
+  used (as designed).
+- **No salary anywhere**: no `pay_input_ranges` on Greenhouse list
+  responses, no `salaryRange` on Lever. Salary stays NULL (never invented).
+- Greenhouse boards expose no employment-type metadata on these boards
+  (fields like "Pay Rate Type [WD]", "Management Level"); employment type is
+  known for 2.5% (from unambiguous titles). No remote/hybrid postings exist
+  on these boards, so work model is unknown there — correctly.
+- HelloFresh posting URLs live on `careers.hellofresh.com/...?gh_jid=<id>`;
+  the required `gh_jid` parameter is kept (as designed). No tracking
+  parameters occurred.
+- Content is entity-encoded HTML (as assumed). Three HelloFresh postings
+  are double-encoded *by the employer* (`&amp;amp;`), so `&amp;` remains
+  in their text — exactly what the employer's own page shows. Comparison
+  keys decode entities, so matching is unaffected. Not changed.
+- **Lever `workplaceType` is `onsite`** (docs say `on-site`); the existing
+  pattern matches both — work model 100%.
+- Lever commitments: `Full time`, `Working Student (Part Time)`,
+  `Internship (Full time)`, `Event`. `Event` is not an employment type and
+  stays unknown (as designed).
+- Lever adds `opening`, `descriptionBody` (+ plain variants); the adapter
+  uses `description`, `lists` and `additional`, which carry the text.
+- Lever has no company-name field (as documented); identity comes from the
+  configured display name, never invented.
+
+### Coverage and gaps (no code changed)
+
+- Location vocabulary recognized 100% of Lever locations but only ~25% of
+  Greenhouse ones (canonical `city` set for 157 of 503 jobs). Unrecognized:
+  North American and Polish "City, Region, Country" forms
+  ("Toronto, Ontario, Canada", "Aurora, IL, United States",
+  "Warszawa, Masovian Voivodeship, Poland") and cities outside the
+  vocabulary ("Verden, Niedersachsen, Germany", "Manila…"). They fall back
+  to text keys — conservative: no wrong merges, but a "Toronto" posting on
+  one source and "Toronto, Ontario, Canada" on another would not match.
+- Title keys strip German gender markers only; real titles also carry
+  `(H/F/N)` (French) and `(v/m/x)` (Dutch), which stay in the key. Same
+  effect: possible missed matches, never wrong merges.
+- Requirements/responsibilities extraction depends on heading words; Lever
+  headings such as "The Role" or "A Day in the Life…" are not classified
+  (responsibilities found for 26% of Lever postings).
+
+These are recall limitations of the conservative design, not bugs; no real
+cross-source duplicate was missed because of them. Extending the
+vocabularies is a candidate for a later version, driven by real data.
+
+### Deduplication on real data
+
+- **No naturally occurring cross-source duplicate** exists among these
+  boards (no company publishes on both providers here). None was
+  manufactured; cross-source merging remains covered by the deterministic
+  tests.
+- Same title, different location: 14 real groups in the harness run (235
+  stored postings; e.g. one Netlight title in
+  Toronto and Helsinki; a HelloFresh title in Berlin, Toronto and Warsaw)
+  stay separate jobs.
+- **Real same-board twins**: HelloFresh lists distinct vacancies with the
+  same title and location and near-identical text (similarity 0.91–0.99).
+  They stay separate (same source, different ids). If another source listed
+  one of them, the resolver would see two equally good candidates and **not
+  merge** (ambiguity rule) — pinned by `tests/test_live_fixture_regressions.py`.
+- Genuinely different vacancies stayed separate; total jobs = total postings.
+
+### Captured fixtures and tests
+
+Raw responses are in `backend/tests/fixtures/jobs/live/` (see its README;
+one named contact person was redacted). They drive
+`tests/test_live_sources.py` (full pipeline replay per board: repeat
+discovery, no duplicates, inactivation) and
+`tests/test_live_fixture_regressions.py` (normalization of every real
+posting, same-board twins, same-title/different-location, Lever
+vocabulary, the empty-but-existing Lever site).
+
+### The harness
+
+```bash
+cd backend
+python -m e2e.live_sources --capture tests/fixtures/jobs/live --report live-report.json
+JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py   # opt-in live test
+```
+
+It probes the adapters' real endpoints, then runs `JobDiscoveryService`
+twice through the production pipeline into a migrated scratch database and
+reports reachability, response shape, field coverage, duplicates,
+cross-source matches, same-title separation and repeat stability. Status:
+`PASS` / `PARTIAL` / `BLOCKED` / `FAIL`; a provider counts as validated only
+after real HTTP 200 JSON. It stores at most 200 postings per source per run
+(the API's run limit); the 268 remaining Greenhouse postings were persisted
+with pages 2–3 through the same pipeline for this validation.
+
+### Hardening (V0.4.1, before live access)
+
+- Malformed records, unexpected normalizer errors and database-rejected
+  postings are isolated instead of failing whole runs; bounded, observable
+  retries for transient failures (job-discovery.md §13a). The live run
+  needed neither (0 retries, 0 invalid records).
+
+**No application code changes were required by the real provider data.**

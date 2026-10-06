@@ -99,6 +99,9 @@ def fetcher_for(boards: FakeJobBoards, hosts: Iterable[str], **kwargs: Any) -> J
         timeout_seconds=kwargs.get("timeout_seconds", 5.0),
         max_response_bytes=kwargs.get("max_response_bytes", 5_000_000),
         transport=boards.transport,
+        max_retries=kwargs.get("max_retries", 2),
+        # Retries are exercised in tests, but never actually slept on.
+        retry_backoff_seconds=kwargs.get("retry_backoff_seconds", 0.0),
     )
 
 

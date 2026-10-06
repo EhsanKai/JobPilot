@@ -82,11 +82,9 @@ class LeverJobSource(BoardJobSource):
             )
             if not isinstance(page, list):
                 raise SourceResponseError(target=board.key)
-            for item in page:
-                if isinstance(item, dict):
-                    jobs.append(self.to_raw_job(item, board=board))
-                else:
-                    unreadable += 1
+            read = self.read_items(page, board, lambda item: self.to_raw_job(item, board=board))
+            jobs.extend(read.jobs)
+            unreadable += read.unreadable_items
             if len(page) < PAGE_SIZE:
                 break
             skip += PAGE_SIZE

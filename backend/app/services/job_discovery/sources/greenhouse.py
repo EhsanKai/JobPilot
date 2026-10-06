@@ -70,14 +70,11 @@ class GreenhouseJobSource(BoardJobSource):
 
         company_name = board.company_name or await self._board_name(client, board)
 
-        jobs: list[RawJob] = []
-        unreadable = 0
-        for item in data["jobs"]:
-            if not isinstance(item, dict):
-                unreadable += 1
-                continue
-            jobs.append(self.to_raw_job(item, board=board, company_name=company_name))
-        return BoardResult(jobs=jobs, unreadable_items=unreadable)
+        return self.read_items(
+            data["jobs"],
+            board,
+            lambda item: self.to_raw_job(item, board=board, company_name=company_name),
+        )
 
     async def _board_name(self, client: httpx.AsyncClient, board: Board) -> str | None:
         """The organization name from the board endpoint. Best effort: if it

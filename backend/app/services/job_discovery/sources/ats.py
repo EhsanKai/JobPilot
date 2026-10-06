@@ -9,7 +9,9 @@ isolating failures so one broken board never discards the others.
 import asyncio
 import re
 from abc import abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -103,8 +105,9 @@ class BoardJobSource(JobSource):
                         return exc
 
             outcomes = await asyncio.gather(*(read(board) for board in self.boards))
+            retried = self._fetcher.retries(client)
 
-        result = SourceSearchResult(targets_attempted=len(self.boards))
+        result = SourceSearchResult(targets_attempted=len(self.boards), retried_requests=retried)
         for board, outcome in zip(self.boards, outcomes, strict=True):
             if isinstance(outcome, SourceError):
                 result.targets_failed += 1
@@ -121,6 +124,30 @@ class BoardJobSource(JobSource):
             if outcome.unreadable_items == 0 and len(outcome.jobs) < self._max_jobs_per_board:
                 result.complete_targets.append(board.key)
         return result
+
+    def read_items(
+        self, items: list[object], board: Board, to_raw_job: Callable[[dict[str, Any]], RawJob]
+    ) -> BoardResult:
+        """Convert a board's items one by one. An item that isn't an object,
+        or whose shape the adapter can't handle, is counted as unreadable and
+        logged -- it never discards the board's other postings."""
+        jobs: list[RawJob] = []
+        unreadable = 0
+        for item in items:
+            if not isinstance(item, dict):
+                unreadable += 1
+                continue
+            try:
+                jobs.append(to_raw_job(item))
+            except Exception as exc:  # noqa: BLE001 -- isolate one malformed record
+                unreadable += 1
+                logger.warning(
+                    "Unreadable job record source=%s board=%s error=%s",
+                    self.name,
+                    board.key,
+                    type(exc).__name__,
+                )
+        return BoardResult(jobs=jobs, unreadable_items=unreadable)
 
     @abstractmethod
     async def fetch_board(self, client: httpx.AsyncClient, board: Board) -> BoardResult:

@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import psycopg.errors
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DataError, IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -77,12 +77,20 @@ SOURCE_SEARCH_TIMEOUT_SECONDS = 180.0
 _SUMMED_FIELDS = (
     "fetched", "invalid", "filtered_out", "beyond_limit", "duplicates", "created", "merged",
     "updated", "unchanged", "cross_source_matches", "possible_matches", "skipped", "error_count",
+    "retried_requests",
 )
 # Storing a source's postings is retried when Postgres aborts the
 # transaction to break a deadlock or a serialization conflict with a
 # concurrent run. Every attempt starts from scratch.
 _STORE_ATTEMPTS = 3
 _RETRYABLE_ERRORS = (psycopg.errors.DeadlockDetected, psycopg.errors.SerializationFailure)
+# Database errors caused by one posting's data. That posting is skipped (its
+# savepoint rolled back, so no partial job is left) and reported; the rest of
+# the source is stored. Anything else is a bug and fails the run.
+_POSTING_DATA_ERRORS = (DataError, IntegrityError)
+POSTING_REJECTED = SourceIssueRead(
+    code="POSTING_REJECTED", message="A job posting could not be stored and was skipped."
+)
 
 
 @dataclass
@@ -203,6 +211,7 @@ class JobDiscoveryService:
             SourceIssueRead(code=i.code, message=i.message, target=i.target) for i in result.issues
         ]
         summary.error_count = len(summary.errors)
+        summary.retried_requests = result.retried_requests
         if result.targets_attempted and result.targets_failed >= result.targets_attempted:
             summary.status = SourceRunStatus.FAILED
         elif result.targets_failed or result.issues:
@@ -225,6 +234,16 @@ class JobDiscoveryService:
                     "Skipping invalid job source=%s field=%s", source.name, exc.field_name
                 )
                 continue
+            except Exception as exc:  # noqa: BLE001 -- one odd record must not sink the run
+                summary.invalid += 1
+                boards_with_invalid.add(raw.source_company_key)
+                logger.warning(
+                    "Could not normalize job source=%s board=%s error=%s",
+                    source.name,
+                    raw.source_company_key,
+                    type(exc).__name__,
+                )
+                continue
             if job.dedup_key in seen_keys:
                 summary.duplicates += 1
                 continue
@@ -239,11 +258,18 @@ class JobDiscoveryService:
         start = (criteria.page - 1) * criteria.limit
         selected = matching[start : start + criteria.limit]
         summary.beyond_limit = len(matching) - len(selected)
+
+        stored, rejected = self._store(db, user, selected, now)
+        for job in rejected:
+            summary.invalid += 1
+            summary.errors.append(
+                POSTING_REJECTED.model_copy(update={"target": job.source_company_key})
+            )
+            boards_with_invalid.add(job.source_company_key)
+        summary.error_count = len(summary.errors)
         summary.skipped = (
             summary.invalid + summary.duplicates + summary.filtered_out + summary.beyond_limit
         )
-
-        stored = self._store(db, user, selected, now)
         for item in stored:
             if item.outcome is UpsertOutcome.CREATED:
                 summary.created += 1
@@ -276,20 +302,36 @@ class JobDiscoveryService:
 
     def _store(
         self, db: Session, user: User, jobs: list[NormalizedJob], now: datetime
-    ) -> list[UpsertResult]:
+    ) -> tuple[list[UpsertResult], list[NormalizedJob]]:
         """Store one source's selected postings in one transaction, holding
-        the identity locks they need (see persistence.lock_postings)."""
+        the identity locks they need (see persistence.lock_postings). Each
+        posting gets its own savepoint: one whose data the database rejects
+        is rolled back completely (no partial job) and returned as rejected."""
         ordered = sorted(jobs, key=lambda job: job.dedup_key)
         for attempt in range(1, _STORE_ATTEMPTS + 1):
             try:
                 lock_postings(db, ordered)
                 stored: list[UpsertResult] = []
+                rejected: list[NormalizedJob] = []
                 for job in ordered:
-                    item = upsert_job(db, job, now=now)
-                    link_user_job(db, user_id=user.id, job_id=item.job_id, now=now)
+                    savepoint = db.begin_nested()
+                    try:
+                        item = upsert_job(db, job, now=now)
+                        link_user_job(db, user_id=user.id, job_id=item.job_id, now=now)
+                    except _POSTING_DATA_ERRORS as exc:
+                        savepoint.rollback()
+                        rejected.append(job)
+                        logger.warning(
+                            "Rejected job posting source=%s board=%s error=%s",
+                            job.source,
+                            job.source_company_key,
+                            type(exc.orig).__name__,
+                        )
+                        continue
+                    savepoint.commit()
                     stored.append(item)
                 db.commit()  # keep each source's results even if a later one fails
-                return stored
+                return stored, rejected
             except OperationalError as exc:
                 db.rollback()
                 if not isinstance(exc.orig, _RETRYABLE_ERRORS) or attempt == _STORE_ATTEMPTS:
