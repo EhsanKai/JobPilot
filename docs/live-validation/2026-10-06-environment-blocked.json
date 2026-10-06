@@ -1,0 +1,69 @@
+{
+  "started_at": "2026-10-06T10:04:28.039380+00:00",
+  "probes": [
+    {
+      "provider": "greenhouse",
+      "board": "getyourguide",
+      "url": "https://boards-api.greenhouse.io/v1/boards/getyourguide/jobs?content=true",
+      "reachable": false,
+      "http_status": null,
+      "error": "ProxyError: 403 Forbidden",
+      "retry_after": null,
+      "shape": {}
+    },
+    {
+      "provider": "greenhouse",
+      "board": "hellofresh",
+      "url": "https://boards-api.greenhouse.io/v1/boards/hellofresh/jobs?content=true",
+      "reachable": false,
+      "http_status": null,
+      "error": "ProxyError: 403 Forbidden",
+      "retry_after": null,
+      "shape": {}
+    },
+    {
+      "provider": "greenhouse",
+      "board": "grover",
+      "url": "https://boards-api.greenhouse.io/v1/boards/grover/jobs?content=true",
+      "reachable": false,
+      "http_status": null,
+      "error": "ProxyError: 403 Forbidden",
+      "retry_after": null,
+      "shape": {}
+    },
+    {
+      "provider": "lever",
+      "board": "ppro",
+      "url": "https://api.lever.co/v0/postings/ppro?mode=json&limit=1",
+      "reachable": false,
+      "http_status": null,
+      "error": "ProxyError: 403 Forbidden",
+      "retry_after": null,
+      "shape": {}
+    },
+    {
+      "provider": "lever",
+      "board": "netlight",
+      "url": "https://api.lever.co/v0/postings/netlight?mode=json&limit=1",
+      "reachable": false,
+      "http_status": null,
+      "error": "ProxyError: 403 Forbidden",
+      "retry_after": null,
+      "shape": {}
+    }
+  ],
+  "providers": {
+    "greenhouse": {
+      "boards": 3,
+      "reachable_boards": 0
+    },
+    "lever": {
+      "boards": 2,
+      "reachable_boards": 0
+    }
+  },
+  "runs": [],
+  "analysis": null,
+  "captured_files": [],
+  "status": "BLOCKED"
+}
