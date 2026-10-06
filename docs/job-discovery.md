@@ -288,8 +288,11 @@ NOTHING`). Titles are never used as keys: two different jobs with the same
 title stay separate. A posting returned twice in one run (e.g. listed on two
 boards) is counted under `duplicates`.
 
-Cross-source deduplication (the same job on Greenhouse and a job board) is
-**V0.4**.
+Cross-source deduplication (the same job on Greenhouse and Lever) is
+**V0.4** — see [`job-intelligence.md`](job-intelligence.md). Since V0.4 the
+source identity described here (`dedup_key`, source id, URLs, raw payload,
+content hash) lives on `job_source_postings`; the canonical `jobs` row holds
+the normalized content and a stable id.
 
 ## 10. Refresh behavior
 

@@ -1,9 +1,11 @@
-# JobPilot Architecture — V0 to V0.3
+# JobPilot Architecture — V0 to V0.4
 
 This document captures the architectural decisions behind the V0 foundation,
-the V0.1 structured Job Search Profile, V0.2 Resume Intelligence and V0.3
-Job Discovery, and how later versions are expected to build on them without
-a rewrite. V0.3 is summarized in §13 and documented in full in
+the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
+Job Discovery and V0.4 Job Intelligence, and how later versions are expected
+to build on them without a rewrite. V0.4 is summarized in §14 and documented
+in full in [`job-intelligence.md`](job-intelligence.md). V0.3 is summarized
+in §13 and documented in full in
 [`job-discovery.md`](job-discovery.md). V0.2 is
 summarized in §12 and documented in full in
 [`resume-intelligence.md`](resume-intelligence.md).
@@ -400,7 +402,8 @@ failed. The frontend polls the run.
   `applications.job_id` keeps working. `canonical_url` is required.
 - **Deduplication key** `dedup_key` is unique: source + source job id, or
   source + hash of the canonical URL. Never the title. Cross-source
-  deduplication is V0.4.
+  deduplication is V0.4 (§14); since then this key lives on
+  `job_source_postings`.
 - **Shared vocabularies.** `jobs.employment_type`, `work_model` and
   `seniority` reuse the `employment_type`, `remote_preference` and
   `professional_seniority_level` enum types, so V0.5 matching compares the
@@ -418,3 +421,34 @@ Each source declares `native_filters`. Everything else JobPilot either
 applies to the fetched postings or reports as `not_applied`; the summary
 says which, per source. A source never claims a filter it didn't apply.
 
+## 14. V0.4 — Job Intelligence (canonical jobs, cross-source dedup)
+
+Full documentation: [`job-intelligence.md`](job-intelligence.md).
+
+```
+RawJob ─► JobNormalizer ─► Source Posting ─► identity resolution ─► Canonical Job ─► UserJob ─► (Application)
+          normalization/   job_source_     deduplication/          jobs (stable id)   user_jobs   applications
+          (deterministic)  postings        EXACT / HIGH merge;
+                           (unique ids)    POSSIBLE never merges
+```
+
+- **Four concepts, four tables.** Source Posting (where/as what a job was
+  found), Canonical Job (what the vacancy is), UserJob (per-user state),
+  Application (future). V0.3's identity/provenance columns moved from
+  `jobs` to `job_source_postings`; the migration gives every existing job
+  one posting and keeps its id.
+- **Comparison keys are separate from display values**: `normalized_title`,
+  `normalized_company_name`, `normalized_location`, `city` next to the
+  original wording; `url_identity_key` next to the clickable canonical URL.
+- **Conservative, deterministic identity**: merges need equal company,
+  title and location keys plus ≥ 0.80 word-3-gram Jaccard similarity and no
+  conflicting facts — or the same posting URL. Ambiguity never merges.
+- **Preferred posting** per job (`preferred_source_posting_id`):
+  active > reliability > application URL > source priority > first seen. It
+  supplies the canonical content and is the future automation target.
+- **Database-enforced concurrency**: unique posting keys with
+  `ON CONFLICT DO NOTHING`, job creation in a savepoint with its first
+  posting, and transaction-scoped advisory locks per (company, title) block
+  taken in sorted order.
+- **Freshness without deletion**: postings become inactive only when a
+  complete board listing no longer contains them; `stale` is computed.

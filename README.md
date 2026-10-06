@@ -7,7 +7,8 @@ tailored application documents, and track applications end to end.
 
 This repository currently implements **V0 — Foundation**,
 **V0.1 — User Profile & Job Preference Intelligence**,
-**V0.2 — Resume Intelligence**, and **V0.3 — Job Discovery Foundation**.
+**V0.2 — Resume Intelligence**, **V0.3 — Job Discovery Foundation**, and
+**V0.4 — Job Intelligence & Cross-Source Normalization**.
 
 ## 1. What JobPilot is
 
@@ -15,7 +16,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.3)
+## 2. Current scope (V0 – V0.4)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -115,6 +116,33 @@ V0.3 deliberately does **not** provide AI matching, match scores,
 auto-apply, browser automation, LinkedIn automation, or application
 tracking.
 
+V0.4 adds **Job Intelligence**: recognizing when postings from different
+sources are the same real-world job. See
+[`docs/job-intelligence.md`](docs/job-intelligence.md).
+
+- **Source Posting vs Canonical Job**: every posting keeps its own row
+  (`job_source_postings`: source, source id, original URL, raw and
+  normalized data, first/last seen, active state); the canonical `Job` has a
+  stable id that `user_jobs` and `applications` point at.
+- Deterministic **normalization** for comparison: URLs (http/https, trailing
+  slash, fragments, tracking parameters), titles (case, Unicode, hyphens,
+  gender markers), companies (legal suffixes), locations (Köln = Cologne,
+  never Bonn; remote/hybrid), employment type, work model, salary (with the
+  original text kept), and a **content hash** of meaningful content.
+- Conservative **cross-source deduplication**: `EXACT` (same URL) and
+  `HIGH_CONFIDENCE` (same company + title + location and ≥ 0.80 description
+  similarity, no conflicting facts) merge; `POSSIBLE_MATCH` is reported but
+  never merged. Database constraints plus advisory locks keep concurrent
+  runs from creating duplicates.
+- A **preferred posting** per job (for future application automation),
+  freshness (`active` / `stale` / `inactive`, nothing deleted), richer run
+  statistics, and a migration that carries all V0.3 data over.
+- UI: one card per job with `Sources: Greenhouse + Lever`; job details list
+  every source with its own "View original posting" link.
+
+V0.4 deliberately contains **no** AI matching, match scores or LLM calls —
+that is V0.5.
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -126,7 +154,7 @@ tracking.
 | Extraction | pypdf (PDF), python-docx (DOCX)                          |
 | Database   | PostgreSQL                                              |
 | Infra      | Docker Compose (PostgreSQL)                             |
-| Testing    | Pytest (backend), Vitest + Testing Library (frontend)   |
+| Testing    | Pytest (backend), Vitest + Testing Library (frontend), Playwright (E2E) |
 
 ## 4. Project structure
 
@@ -136,7 +164,8 @@ jobpilot/
 │   ├── app/            Routes: /, /login, /register, /dashboard, /profile, /jobs, ...
 │   ├── components/     Reusable UI, auth, profile, resume, dashboard components
 │   ├── lib/             API client, auth token storage, typed API calls
-│   └── types/           Shared TypeScript types mirroring backend schemas
+│   ├── types/           Shared TypeScript types mirroring backend schemas
+│   └── e2e/             Playwright real-browser tests
 │
 ├── backend/
 │   ├── app/
@@ -149,14 +178,17 @@ jobpilot/
 │   │   ├── models/      SQLAlchemy models
 │   │   ├── schemas/     Pydantic request/response schemas
 │   │   └── services/    Business logic, storage abstraction, resume_intelligence/
-│   │                      pipeline, job_discovery/ (sources, normalizer, discovery)
+│   │                      pipeline, job_discovery/ (sources, normalizer,
+│   │                      normalization/, deduplication/, discovery)
 │   ├── alembic/         Database migrations
+│   ├── e2e/             Backend launcher for real-browser E2E (mock job boards)
 │   └── tests/           Pytest suite
 │
 ├── docs/
 │   ├── architecture.md
 │   ├── resume-intelligence.md
-│   └── job-discovery.md
+│   ├── job-discovery.md
+│   └── job-intelligence.md
 │
 ├── docker-compose.yml   PostgreSQL (dev infrastructure)
 ├── .env.example
@@ -272,7 +304,21 @@ npm run typecheck  # tsc --noEmit
 npm run build    # production build sanity check
 ```
 
-## 12. API endpoints (V0 – V0.3)
+Real-browser E2E (Playwright + Chromium against the real backend, a freshly
+migrated `<db>_e2e` database and the production frontend build; job boards
+are served by deterministic local mocks, see `backend/e2e/serve.py`):
+
+```bash
+cd frontend
+npm run build
+E2E_PYTHON=../backend/.venv/bin/python npm run e2e
+```
+
+`backend/tests/test_migrations.py` runs the Alembic migrations against a
+scratch database (`<test db>_migrations`); it is skipped if your Postgres
+role can't create databases.
+
+## 12. API endpoints (V0 – V0.4)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -321,9 +367,11 @@ GET    /jobs/criteria/defaults          search criteria derived from job prefere
 POST   /jobs/discover                   start discovery (202); body {"criteria": {...}} optional
 GET    /jobs/discover/runs/latest       latest discovery run
 GET    /jobs/discover/runs/{id}         run status + per-source summary
-GET    /jobs                            your jobs: page, page_size, source, q, location,
-                                        work_model, employment_type, posted_after, saved, sort
-GET    /jobs/{id}                       full job incl. original posting URL
+GET    /jobs                            your jobs, one per canonical job (sources, source_count):
+                                        page, page_size, source, q, location, work_model,
+                                        employment_type, posted_after, saved, sort
+GET    /jobs/{id}                       full job incl. every source posting (source_postings)
+GET    /jobs/{id}/sources               where the job was found: postings + original URLs (V0.4)
 PUT    /jobs/{id}/save                  save
 DELETE /jobs/{id}/save                  unsave
 ```
@@ -340,8 +388,8 @@ in `docs/architecture.md`.
 V0     Foundation                  ✅
 V0.1   User Profile & Job Preference Intelligence   ✅
 V0.2   Resume Intelligence         ✅
-V0.3   Job Discovery               ✅ (current)
-V0.4   Job Normalization & Deduplication
+V0.3   Job Discovery               ✅
+V0.4   Job Intelligence & Cross-Source Normalization   ✅ (current)
 V0.5   AI Matching
 V0.6   Job Dashboard / MVP
 V0.7   Application Workspace
