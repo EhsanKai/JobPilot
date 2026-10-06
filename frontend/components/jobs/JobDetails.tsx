@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { MatchPanel } from "@/components/jobs/MatchPanel";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -109,6 +110,8 @@ export function JobDetails({ jobId }: { jobId: string }) {
       </div>
 
       {error && <Alert variant="error">{error}</Alert>}
+
+      <MatchPanel jobId={job.id} />
 
       <Card>
         <h2 className="text-lg font-semibold text-slate-900">JobPilot data</h2>

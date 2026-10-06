@@ -286,7 +286,7 @@ def test_job_facts_cover_every_placeholder() -> None:
     dumped = facts.model_dump(mode="json")
     assert set(dumped) == {
         "schema_version", "seniority", "employment_type", "work_model", "location", "salary",
-        "language", "travel", "authorization", "document_language",
+        "language", "travel", "authorization", "document_language", "title", "industry",
     }
     assert JobFacts.model_validate(dumped).model_dump(mode="json") == dumped
 

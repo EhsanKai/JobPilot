@@ -12,6 +12,7 @@ from app.models.discovery_run import DiscoveryRunStatus
 from app.models.job import SalaryPeriod
 from app.models.job_preferences import EmploymentTypeValue, RemotePreference
 from app.models.professional_profile import SeniorityLevel
+from app.schemas.matching import MatchSummaryRead
 
 _MAX_TERM_LENGTH = 100
 _MAX_TERMS = 20
@@ -349,6 +350,8 @@ class JobSummaryRead(BaseModel):
     discovered_at: datetime
     saved: bool
     saved_at: datetime | None
+    #: Your match for this job (V0.6); null when none was calculated.
+    match: MatchSummaryRead | None = None
 
 
 class JobDetailRead(JobSummaryRead):
@@ -391,3 +394,4 @@ class JobSort(str, enum.Enum):
     POSTED = "posted"  # newest posting first
     DISCOVERED = "discovered"  # most recently discovered first
     SAVED = "saved"  # most recently saved first
+    MATCH = "match"  # best Overall Match first; jobs without a match last (V0.6)

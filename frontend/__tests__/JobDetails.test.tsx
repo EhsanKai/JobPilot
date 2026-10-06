@@ -18,6 +18,14 @@ vi.mock("@/lib/api/jobs", () => ({
   unsaveJob: (...args: unknown[]) => unsaveJobMock(...args),
 }));
 
+// The match panel (V0.6) has its own tests (MatchPanel.test.tsx).
+vi.mock("@/lib/api/match", () => ({
+  getMatch: (jobId: string) =>
+    Promise.resolve({ job_id: jobId, status: "not_calculated", result: null }),
+  calculateMatch: vi.fn(),
+  explainMatch: vi.fn(),
+}));
+
 describe("JobDetails", () => {
   beforeEach(() => {
     getJobMock.mockReset();

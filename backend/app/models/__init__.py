@@ -9,6 +9,7 @@ from app.models.industry import Industry, UserIndustry
 from app.models.job import Job, SalaryPeriod
 from app.models.job_intelligence import JobIntelligence
 from app.models.job_match import JobMatch, MatchVerdict
+from app.models.job_match_explanation import JobMatchExplanation
 from app.models.job_preferences import (
     EmploymentType,
     JobPreferenceEmploymentType,
@@ -85,4 +86,5 @@ __all__ = [
     "ExtractionConfidence",
     "JobMatch",
     "MatchVerdict",
+    "JobMatchExplanation",
 ]

@@ -1,3 +1,4 @@
+import type { MatchSummary } from "@/types/match";
 import type { EmploymentType, RemotePreference } from "@/types/preferences";
 
 export type SeniorityLevel =
@@ -62,6 +63,8 @@ export interface JobSummary {
   discovered_at: string;
   saved: boolean;
   saved_at: string | null;
+  /** Your match for this job (V0.6); null when none was calculated. */
+  match?: MatchSummary | null;
 }
 
 export type PostingStatus = "active" | "stale" | "inactive";
@@ -118,7 +121,7 @@ export interface JobList {
   total_pages: number;
 }
 
-export type JobSort = "posted" | "discovered" | "saved";
+export type JobSort = "posted" | "discovered" | "saved" | "match";
 
 export interface JobListQuery {
   page?: number;

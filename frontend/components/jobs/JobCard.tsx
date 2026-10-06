@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { MatchBadge } from "@/components/jobs/MatchBadge";
 import { Button } from "@/components/ui/Button";
 import {
   EMPLOYMENT_TYPE_LABELS,
@@ -59,6 +60,8 @@ export function JobCard({ job, isSaving = false, onToggleSave }: JobCardProps) {
           </span>
         </div>
       </div>
+
+      <MatchBadge match={job.match} />
 
       {facts.length > 0 && (
         <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-700" aria-label="Job facts">

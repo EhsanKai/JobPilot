@@ -254,7 +254,8 @@ export function PreferencesForm({ preferences, onSaved }: PreferencesFormProps) 
           Deal breakers
         </h3>
         <p className="text-xs text-slate-400">
-          These don&apos;t affect anything yet &mdash; future versions will use them for matching.
+          A job that hits one of these is marked &quot;Not recommended&quot; in your match results.
+          Only what you tick here can block a job.
         </p>
         <div className="flex flex-col gap-2">
           {DEAL_BREAKERS.map(({ type, label }) => (

@@ -13,6 +13,7 @@ import {
   makeSourceSummary,
   makeSummary,
 } from "./fixtures/jobs";
+import { makeMatchSummary } from "./fixtures/match";
 
 const listJobsMock = vi.fn();
 const listJobSourcesMock = vi.fn();
@@ -32,6 +33,12 @@ vi.mock("@/lib/api/jobs", () => ({
   unsaveJob: (...args: unknown[]) => unsaveJobMock(...args),
 }));
 
+const calculateMatchesMock = vi.fn();
+
+vi.mock("@/lib/api/match", () => ({
+  calculateMatches: (...args: unknown[]) => calculateMatchesMock(...args),
+}));
+
 function renderDashboard() {
   return render(<JobsDashboard pollIntervalMs={5} />);
 }
@@ -46,6 +53,7 @@ describe("JobsDashboard", () => {
       startDiscoveryMock,
       saveJobMock,
       unsaveJobMock,
+      calculateMatchesMock,
     ]) {
       mock.mockReset();
     }
@@ -293,5 +301,44 @@ describe("JobsDashboard", () => {
       expect(listJobsMock).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }))
     );
     expect(await screen.findByText("Page 2 of 3")).toBeInTheDocument();
+  });
+
+  it("shows the match on each card, or that it isn't calculated", async () => {
+    listJobsMock.mockResolvedValue(
+      makeList([
+        makeJob({ id: "a", title: "Matched job", match: makeMatchSummary() }),
+        makeJob({ id: "b", title: "Unmatched job", match: null }),
+      ])
+    );
+    renderDashboard();
+    const matched = await screen.findByRole("article", { name: "Matched job" });
+    expect(within(matched).getByText("87% Overall match")).toBeInTheDocument();
+    expect(within(matched).getByText("Job match 94% · Preference match 71%")).toBeInTheDocument();
+    const unmatched = screen.getByRole("article", { name: "Unmatched job" });
+    expect(within(unmatched).getByText("Match not calculated")).toBeInTheDocument();
+  });
+
+  it("calculates matches for the jobs on the page and reloads", async () => {
+    listJobsMock.mockResolvedValue(
+      makeList([makeJob({ id: "a", title: "A" }), makeJob({ id: "b", title: "B" })])
+    );
+    calculateMatchesMock.mockResolvedValue({
+      results: [], calculated: 2, unchanged: 0, not_found: [],
+    });
+    renderDashboard();
+    await screen.findByRole("article", { name: "A" });
+    await userEvent.click(screen.getByRole("button", { name: "Calculate matches" }));
+    expect(calculateMatchesMock).toHaveBeenCalledWith(["a", "b"]);
+    expect(await screen.findByText("Calculated 2 matches.")).toBeInTheDocument();
+    expect(listJobsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sorts by best match", async () => {
+    renderDashboard();
+    await screen.findByRole("article", { name: "Senior Backend Engineer (Python)" });
+    await userEvent.selectOptions(screen.getByLabelText("Sort"), "match");
+    await waitFor(() =>
+      expect(listJobsMock).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "match" }))
+    );
   });
 });

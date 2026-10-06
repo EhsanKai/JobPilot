@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.errors import NotFoundError
 from app.models.discovery_run import DiscoveryRun, DiscoveryRunStatus
 from app.models.job import Job
+from app.models.job_match import JobMatch
 from app.models.job_preferences import EmploymentTypeValue, RemotePreference
 from app.models.job_source_posting import JobSourcePosting
 from app.models.user import User
@@ -36,6 +37,7 @@ from app.schemas.jobs import (
     PostingStatus,
 )
 from app.services.job_discovery.deduplication.merger import order_postings
+from app.services.matching import status as match_status
 
 
 def _like(term: str) -> str:
@@ -178,7 +180,9 @@ def to_detail(
 
 
 def detail(db: Session, user: User, job: Job, user_job: UserJob) -> JobDetailRead:
-    return to_detail(job, user_job, latest_run_coverage(db, user))
+    result = to_detail(job, user_job, latest_run_coverage(db, user))
+    result.match = match_status.summaries(db, user, [job]).get(job.id)
+    return result
 
 
 def source_postings(db: Session, user: User, job_id: uuid.UUID) -> list[JobSourcePostingRead]:
@@ -260,14 +264,25 @@ def list_jobs(
         order = [UserJob.saved_at.desc().nulls_last()]
     elif sort is JobSort.DISCOVERED:
         order = [UserJob.first_discovered_at.desc().nulls_last()]
+    elif sort is JobSort.MATCH:
+        # The user's own current results only.
+        query = query.outerjoin(
+            JobMatch,
+            and_(JobMatch.job_id == Job.id, JobMatch.user_id == user.id, JobMatch.is_current),
+        )
+        order = [JobMatch.score.desc().nulls_last(), Job.posted_at.desc().nulls_last()]
     else:
         order = [Job.posted_at.desc().nulls_last(), Job.discovered_at.desc()]
     rows = db.execute(
         query.order_by(*order, Job.id).offset((page - 1) * page_size).limit(page_size)
     ).all()
 
+    items = [to_summary(job, user_job) for job, user_job in rows]
+    matches = match_status.summaries(db, user, [job for job, _ in rows])
+    for item in items:
+        item.match = matches.get(item.id)
     return JobListResponse(
-        items=[to_summary(job, user_job) for job, user_job in rows],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
