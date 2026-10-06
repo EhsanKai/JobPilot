@@ -7,8 +7,10 @@ tailored application documents, and track applications end to end.
 
 This repository currently implements **V0 — Foundation**,
 **V0.1 — User Profile & Job Preference Intelligence**,
-**V0.2 — Resume Intelligence**, **V0.3 — Job Discovery Foundation**, and
-**V0.4 — Job Intelligence & Cross-Source Normalization**.
+**V0.2 — Resume Intelligence**, **V0.3 — Job Discovery Foundation**,
+**V0.4 — Job Intelligence & Cross-Source Normalization**, the V0.5 matching
+foundations (data model and taxonomy) and **V0.6 — Job Matching &
+Explainability**.
 
 ## 1. What JobPilot is
 
@@ -16,7 +18,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.4)
+## 2. Current scope (V0 – V0.6)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -157,6 +159,19 @@ conservative normalizer that returns MATCH, UNKNOWN or AMBIGUOUS, never a
 guess. The seed comes from the 503 real postings. There is still nothing
 user-facing, and no extraction, matching or AI. See
 [`docs/taxonomy.md`](docs/taxonomy.md).
+
+V0.6 adds **Job Matching & Explainability**. For each of your jobs,
+JobPilot calculates — deterministically, never by AI — a **Job Match** (can
+you do the job: skills, experience, role, seniority, industry, languages,
+education), a **Preference Match** (does it fit what you want: location,
+work model, salary, employment type, desired roles, travel) and an
+**Overall Match** (70/30), plus a recommendation, strong matches, gaps,
+unknowns and deal breakers, all with evidence from your profile and the
+posting. Unknown information is never counted against you; only deal
+breakers you configured can block a job. An optional AI explanation puts
+the result in plain words and is validated against it. Results are
+per-user, versioned, and marked as outdated when your profile, the job or
+the model changes. See [`docs/job-matching.md`](docs/job-matching.md).
 
 ## 3. Tech stack
 
@@ -345,7 +360,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.4)
+## 12. API endpoints (V0 – V0.6)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -401,7 +416,15 @@ GET    /jobs/{id}                       full job incl. every source posting (sou
 GET    /jobs/{id}/sources               where the job was found: postings + original URLs (V0.4)
 PUT    /jobs/{id}/save                  save
 DELETE /jobs/{id}/save                  unsave
+
+GET    /jobs/{id}/match                 your match: not_calculated | calculated | stale (V0.6)
+POST   /jobs/{id}/match                 calculate / recalculate (deterministic, no AI)
+POST   /jobs/match                      batch: {"job_ids": [...≤25]} or {"limit": n}; no AI
+POST   /jobs/{id}/match/explanation     optional AI explanation, validated and cached
 ```
+
+`GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
+`null`); `GET /jobs?sort=match` lists the best Overall Match first.
 
 Note: `PUT /preferences` and `PUT /profile` replace the fields they cover in
 full. The frontend always round-trips the job titles/locations it isn't
@@ -417,8 +440,9 @@ V0.1   User Profile & Job Preference Intelligence   ✅
 V0.2   Resume Intelligence         ✅
 V0.3   Job Discovery               ✅
 V0.4   Job Intelligence & Cross-Source Normalization   ✅
-V0.5   AI Matching                 (in progress: V0.5.0 data model ✅, V0.5.1 taxonomy ✅)
-V0.6   Job Dashboard / MVP
+V0.5   Matching foundations        ✅ (V0.5.0 data model, V0.5.1 taxonomy)
+V0.6   Job Matching & Explainability   ✅
+       Job Dashboard / MVP
 V0.7   Application Workspace
 V0.8   Tailored CV + Anschreiben
 V0.9   Application Question AI

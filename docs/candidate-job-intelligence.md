@@ -312,6 +312,11 @@ and enums are exactly as specified.
 
 ## 10. Future V0.5 components (not implemented)
 
+> **Update (V0.6):** the snapshot builder, deterministic requirement
+> extraction and scoring now exist — see [`job-matching.md`](job-matching.md).
+> The scoring model shipped as `matching_v1`. The list below is kept as the
+> V0.5.0 record.
+
 Everything below is **future work** — none of it exists in V0.5.0:
 
 - **Snapshot builder**: assembles `CandidateProfileDocument` from the V0.1

@@ -1,9 +1,11 @@
-# JobPilot Architecture — V0 to V0.5.1
+# JobPilot Architecture — V0 to V0.6
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. The V0.5.1 taxonomy & deterministic
+to build on them without a rewrite. V0.6 Job Matching & Explainability is
+summarized in §17 and documented in full in [`job-matching.md`](job-matching.md).
+The V0.5.1 taxonomy & deterministic
 normalization foundation is summarized in §16 and documented in
 [`taxonomy.md`](taxonomy.md). The V0.5.0 matching data foundation is
 summarized in §15 and documented in full in
@@ -512,4 +514,52 @@ Full documentation: [`taxonomy.md`](taxonomy.md).
 - **Data-driven seed**: every entry is evidenced in the 503 real V0.4.1
   postings (enforced by tests).
 - No migration, API, UI, extraction, matching or AI.
+
+## 17. V0.6 — Job Matching & Explainability
+
+Full documentation: [`job-matching.md`](job-matching.md).
+
+```
+Candidate snapshot (V0.1 + confirmed resume) ─┐
+                                              ├─> Match Engine (deterministic, matching_v1)
+Canonical Job -> job_intelligence + requirements ┘        │
+                                       Job Match · Preference Match · Evidence
+                                                          │
+                                       Overall Match -> caps -> Recommendation
+                                                          │
+                                              AI Explanation Layer (optional, validated)
+```
+
+- **Deterministic score, AI explanation.** `app/services/matching/engine.py`
+  is a pure function; every weight and threshold is in `model.py` and
+  hashed into `job_matches.model_hash` (pinned by a test). The AI (existing
+  `AIProvider`, prompt `matching_explanation_v1`) only receives the finished
+  result and its output is validated against it; it has no score field.
+- **Two sub-scores**: Job Match (skills 30, experience 20, title 10,
+  seniority 10, industry 10, languages 5, education 5) and Preference Match
+  (location 25, work model 20, salary 20, employment type 15, desired
+  title 10, preferred industry 5, travel 5); Overall = 70/30. UNKNOWN
+  components are excluded, never counted as mismatches.
+- **First writer of the V0.5.0 tables**: candidate snapshots
+  (`candidate.py`), job fact sheets and requirements (`extraction.py`,
+  `job_extractor_v1`), results (`job_matches`). Required / preferred /
+  `UNSPECIFIED` come only from explicit headings and markers.
+- **Taxonomy keys, not strings**: skills, languages, education levels,
+  titles and locations go through the V0.5.1 normalizers; prose is scanned
+  with the same vocabularies (`terms.py`). No geocoding, no external
+  salary data, no profession-specific code.
+- **User-specific and versioned**: results are keyed by the user's
+  `UserJob` (user_id, job_id), pin snapshot / fact-sheet / model / taxonomy
+  versions, and are reported stale when any input changed.
+- **Migration** `c7d2e9f4b1a6`: sub-score, coverage, taxonomy and
+  evidence columns on `job_matches`, `job_match_explanations`, and the
+  `UNSPECIFIED` requirement kind (additive; roundtrip-tested).
+- **API**: `GET/POST /jobs/{id}/match`, `POST /jobs/match` (batch, ≤ 25,
+  no AI), `POST /jobs/{id}/match/explanation`; job list/detail carry a
+  `match` summary and `sort=match`.
+- **UI**: match badge on job cards ("Match not calculated" until
+  calculated), and a "Your match" panel on job details with all states
+  (not calculated, calculating, calculated, stale, error).
+- Not in V0.6: browser automation, auto-fill, application submission, CV /
+  cover-letter generation, auto-apply.
 
