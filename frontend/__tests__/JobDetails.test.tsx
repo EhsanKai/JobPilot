@@ -12,6 +12,13 @@ const getJobMock = vi.fn();
 const saveJobMock = vi.fn();
 const unsaveJobMock = vi.fn();
 
+// The application card (V0.7) navigates to the workspace; it has its own
+// tests (ApplicationStart.test.tsx).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+}));
+vi.mock("@/lib/api/applications", () => ({ startApplication: vi.fn() }));
+
 vi.mock("@/lib/api/jobs", () => ({
   getJob: (...args: unknown[]) => getJobMock(...args),
   saveJob: (...args: unknown[]) => saveJobMock(...args),

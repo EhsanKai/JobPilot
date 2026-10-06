@@ -45,7 +45,8 @@ export function AppShell({ children }: AppShellProps) {
                 href={link.href}
                 className={`text-sm font-medium ${
                   pathname === link.href ||
-                  (link.href === "/jobs" && pathname.startsWith("/jobs/"))
+                  (link.href === "/jobs" &&
+                    (pathname.startsWith("/jobs/") || pathname.startsWith("/applications/")))
                     ? "text-brand-700"
                     : "text-slate-600 hover:text-slate-900"
                 }`}
