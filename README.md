@@ -314,6 +314,17 @@ npm run build
 E2E_PYTHON=../backend/.venv/bin/python npm run e2e
 ```
 
+Live source validation (V0.4.1) contacts the real Greenhouse and Lever APIs
+through the production pipeline and needs network access to
+`boards-api.greenhouse.io` and `api.lever.co` (it was **blocked** in the
+V0.4.1 development environment — see `docs/job-intelligence.md` §22):
+
+```bash
+cd backend
+python -m e2e.live_sources --capture tests/fixtures/jobs/live
+JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
+```
+
 `backend/tests/test_migrations.py` runs the Alembic migrations against a
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.

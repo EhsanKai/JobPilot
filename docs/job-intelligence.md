@@ -43,6 +43,7 @@ Contents
 19. [Discovery statistics](#19-discovery-statistics)
 20. [API and UI](#20-api-and-ui)
 21. [Code map, tests, limitations](#21-code-map-tests-limitations)
+22. [V0.4.1 — Live source validation](#22-v041--live-source-validation)
 
 ---
 
@@ -637,3 +638,101 @@ Limitations (honest):
 - No manual merge/split UI; `POSSIBLE_MATCH` is reported, not reviewable yet.
 - Inactivation only works for sources that report complete board listings
   (both current ATS sources do).
+
+## 22. V0.4.1 — Live source validation
+
+V0.4.1 adds no product feature. Its goal was to validate V0.4 against the
+real Greenhouse and Lever APIs and to harden the adapters from what that
+showed. **Result in the V0.4.1 development environment: BLOCKED** — neither
+provider could be contacted, so no real provider data was validated and no
+real-data fixtures exist yet.
+
+### What was attempted (2026-10-06)
+
+| Provider | Endpoint (as used by the adapter) | DNS | Result |
+|---|---|---|---|
+| Greenhouse | `GET https://boards-api.greenhouse.io/v1/boards/{getyourguide,hellofresh,grover}/jobs?content=true` and `/v1/boards/{token}` | resolves | **blocked**: egress proxy answered `403` to `CONNECT` (organization network policy) |
+| Lever | `GET https://api.lever.co/v0/postings/{ppro,netlight}?mode=json` (also `api.eu.lever.co`) | resolves | **blocked**: same `403` on `CONNECT` |
+
+No HTTP status, response body, authentication requirement or rate-limit
+behavior could be observed from either provider. The same request through
+the production pipeline (`JsonFetcher` → adapters → discovery) failed
+every board with `ProxyError` → `SOURCE_UNAVAILABLE`; the run was reported
+as failed and no posting was created, changed or marked inactive. The
+harness report is kept as evidence in
+`docs/live-validation/2026-10-06-environment-blocked.json`.
+
+To unblock: allow `boards-api.greenhouse.io`, `api.lever.co` and
+`api.eu.lever.co` in the environment's network policy (or run from a
+machine with normal internet access), then run the harness below.
+
+### The harness (`backend/e2e/live_sources.py`)
+
+```bash
+cd backend
+python -m e2e.live_sources --capture tests/fixtures/jobs/live --report live-report.json
+# or, as tests:
+JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
+```
+
+Production code only, no mocks:
+
+1. **Probe** one real request per configured board on the adapters'
+   endpoints: reachability, HTTP status, `Retry-After`, response *shape*
+   (keys, item count, first item's keys — never content).
+2. If anything answered: recreate and migrate a scratch database
+   (`<db>_live`), run `JobDiscoveryService.discover` **twice** through the
+   real adapters, normalizer, persistence and identity resolution, and
+   check: no duplicate postings, every job has a posting, the repeat run
+   creates/merges nothing, `first_seen_at` stays, `last_seen_at` advances.
+   It reports per-source field coverage (description, requirements,
+   locations, multiple/remote/recognized locations, department, employment
+   type, work model, structured salary vs. salary text only, apply URL,
+   posted date, tracking parameters removed), the top unrecognized
+   locations, cross-source jobs found, and same-company/same-title jobs
+   kept separate with their locations.
+3. `--capture` stores the raw JSON the adapters received; the
+   regression tests in `tests/test_live_sources.py` then replay every
+   captured board through the pipeline (repeat discovery, no duplicates,
+   inactivation on a simulated disappearance — simulated on the captured
+   listing, never on the real board).
+
+Status: `PASS` (every board reached, every check passed), `PARTIAL` (some
+provider/board unreachable), `BLOCKED` (nothing reachable), `FAIL` (a check
+failed). A provider is only reported as validated after it returned HTTP
+200 with JSON. With `JOBPILOT_LIVE_SOURCES=1`, an unreachable provider
+fails the test instead of skipping it.
+
+### Hardening done without live data
+
+Only changes justified by evidence available in this environment (code
+inspection plus tests that reproduce the problem first):
+
+- **Malformed records sank whole runs.** In V0.4, a single record with an
+  unexpected shape (e.g. `offices` or `departments` not a list in
+  Greenhouse, `lists` not a list in Lever) raised out of the adapter and
+  failed *every* board of that source; an unexpected normalizer error or
+  one database-rejected posting failed the whole run. Now each is isolated
+  and counted (job-discovery.md §13a). Reproduced by tests that fail on the
+  V0.4 code and pass now.
+- **No retries.** A single transient 503, 429 or timeout failed the board.
+  Now bounded, observable retries (job-discovery.md §13a).
+
+Deliberately **not** changed: normalization, location vocabulary, salary
+parsing, deduplication thresholds. The V0.4.1 brief requires such changes
+to be driven by real provider data, and none could be observed. The
+pipeline that would surface those problems (coverage report, captured
+fixtures, replay tests) is in place for the first run with network access.
+
+### Findings vs. V0.4 assumptions
+
+- Provider response schemas, field coverage, pagination behavior and rate
+  limits: **unverified** (blocked). V0.4 still relies on the providers'
+  public documentation, as the adapters' docstrings state.
+- Lever has no company-name field (documented). The harness does not invent
+  one: company identity comes from the configured `LEVER_SITES` display
+  name, so cross-source matching requires the same display name on both
+  sources.
+- Lever instance is global per deployment (`LEVER_INSTANCE`): a site hosted
+  on the EU instance is not found (404) when `global` is configured.
+

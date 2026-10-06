@@ -363,10 +363,47 @@ Run status: `pending → running → completed | partial | failed`.
 - Errors shown to users are fixed, user-safe messages; logs contain ids,
   board names, status codes and exception *types* only.
 - Tests replace real HTTP transports with a guard that raises, so no test
-  can reach a real job board.
+  can reach a real job board -- except tests explicitly marked
+  `live_network`, which only run with `JOBPILOT_LIVE_SOURCES=1` (V0.4.1).
+
+## 13a. Failure handling (V0.4.1)
+
+- **Bounded retries** (`sources/http.py`): connection failures, timeouts,
+  HTTP 429 and 500/502/503/504 are retried at most `JOB_SOURCE_MAX_RETRIES`
+  times (default 2) with exponential backoff
+  (`JOB_SOURCE_RETRY_BACKOFF_SECONDS` × 2ⁿ, default 0.5 s). `Retry-After`
+  (seconds) is honored up to 10 s; a longer request is not waited for and
+  the board is reported as rate-limited. 404/other 4xx and unreadable or
+  oversized responses are never retried. Each retry is logged (host,
+  board, attempt, reason) and counted in the run summary
+  (`retried_requests`). A request that still fails is reported as failed --
+  persistent provider failures are never hidden.
+- **One bad record never sinks a run**:
+  - adapters convert a board's records one by one; a record whose shape
+    the adapter can't handle is counted as unreadable (`invalid`), the
+    rest of the board is kept;
+  - an unexpected error normalizing one record skips that record
+    (`invalid`);
+  - each posting is stored in its own savepoint: one the database rejects
+    (data/integrity error) is rolled back completely -- no partial
+    canonical job -- and reported as `POSTING_REJECTED` (`invalid`,
+    `error_count`). Unexpected programming errors still fail the run with
+    a generic message.
+  - A board with unreadable or invalid records is never used to mark
+    postings inactive.
+- Counts stay consistent: `fetched = invalid + duplicates + filtered_out +
+  beyond_limit + created + merged + updated + unchanged` per source.
 
 ## 14. Testing
 
+- `tests/test_source_hardening.py` (V0.4.1) — retries (transient
+  failures recover, retries are bounded, 4xx/unreadable never retried,
+  backoff, Retry-After cap, Lever pages retried individually) and error
+  isolation (malformed Greenhouse/Lever records, normalizer errors,
+  database-rejected postings, no inactivation from boards with bad records).
+- `tests/test_live_sources.py` (V0.4.1) — the live validation harness, opt-in
+  live tests, and regression tests over captured real responses (see
+  `docs/job-intelligence.md` §22).
 - `tests/test_job_normalizer.py`, `test_job_filters.py`,
   `test_job_sources.py`, `test_jobs_api.py` — adapters run over
   `httpx.MockTransport` with fixtures in `tests/fixtures/jobs/`
@@ -391,9 +428,11 @@ Run status: `pending → running → completed | partial | failed`.
   mid-run leaves the run to be marked abandoned after
   `JOB_DISCOVERY_STALE_MINUTES`.
 - Requirements/responsibilities extraction relies on recognizable headings.
-- Automated tests never call the real APIs (by design). Verify the real
-  sources manually from an environment with internet access: start the
-  stack, open `/jobs`, click "Discover jobs".
+- Automated tests never call the real APIs by default. Live validation is
+  an explicit step: `python -m e2e.live_sources` (or
+  `JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py`) from an
+  environment that can reach `boards-api.greenhouse.io` and `api.lever.co`
+  (see `docs/job-intelligence.md` §22 for the V0.4.1 result).
 
 ## 16. Future sources
 
