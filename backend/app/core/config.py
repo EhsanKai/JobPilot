@@ -83,6 +83,28 @@ class Settings(BaseSettings):
     # received for this many days is reported as "stale". Nothing is deleted.
     JOB_POSTING_STALE_DAYS: int = 14
 
+    # Browser automation (V0.10). JobPilot fills application forms in a
+    # Chromium it controls; the user can take over at any time. It never
+    # submits an application.
+    #
+    # Visible Chromium is the default: the user sees and can use the very
+    # window the assistant works in. Headless (servers, CI) is reported to the
+    # user honestly: the live view is then a screenshot.
+    AUTOMATION_BROWSER_HEADLESS: bool = False
+    # Optional Chromium executable (otherwise Playwright's own).
+    AUTOMATION_CHROMIUM_PATH: str | None = None
+    # localhost / private networks are refused as an application URL unless
+    # this is set (local development, tests); it protects the server from
+    # being pointed at its own network.
+    AUTOMATION_ALLOW_PRIVATE_HOSTS: bool = False
+    AUTOMATION_NAVIGATION_TIMEOUT_SECONDS: float = 30.0
+    # A browser that nobody has used for this long is closed.
+    AUTOMATION_IDLE_CLOSE_MINUTES: int = 30
+    # Live browsers per server process.
+    AUTOMATION_MAX_BROWSERS: int = 3
+    # Fields read from one page; more is "not a form JobPilot understands".
+    AUTOMATION_MAX_FIELDS: int = 300
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]

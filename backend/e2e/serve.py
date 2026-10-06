@@ -19,6 +19,14 @@ application questions are faithful restatements of a supported fact (or "needs
 input"), and Humanize rewords the stub's own sentences without changing a claim. It says
 nothing about the quality of any real model.
 
+V0.10 (browser assistant): the API runs a real headless Chromium against a local fake
+employer website (`tests/fake_site.py`, a real HTTP server). Two extra vacancies
+(published on request by `/e2e/browser-vacancies`, so earlier specs are unaffected) apply
+there: "Platform Engineer" (the application form) and "Security Analyst" (a page that shows
+a CAPTCHA). `/e2e/human/...` is a test-only stand-in for the person at the browser window:
+it types into the very page the assistant works in, outside the assistant, the way a user
+does in the window. It lives in this file only -- nothing in `app/` can reach it.
+
 Mock content: one SAP vacancy published on both boards (Cologne / "Köln",
 same text) plus a Lever posting with the same title in Munich, which must
 stay a separate job.
@@ -30,8 +38,10 @@ Environment:
 """
 
 import os
+from typing import Any
 
 import uvicorn
+from fastapi import APIRouter
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
@@ -55,6 +65,62 @@ def _reset_database(url: str) -> None:
     command.upgrade(config, "head")
 
 
+def _human_router(site: Any) -> APIRouter:
+    """Test-only: acts on the live browser page like a person at the window."""
+    import uuid
+
+    from pydantic import BaseModel
+
+    from tests.automation_helpers import Human
+
+    router = APIRouter(prefix="/e2e")
+
+    class Typing(BaseModel):
+        selector: str
+        text: str
+
+    class Selector(BaseModel):
+        selector: str
+
+    class Goto(BaseModel):
+        url: str
+
+    @router.post("/human/{session_id}/type")
+    def type_into(session_id: uuid.UUID, body: Typing) -> dict[str, str]:
+        Human(str(session_id)).type_into(body.selector, body.text)
+        return {"ok": "true"}
+
+    @router.post("/human/{session_id}/check")
+    def check(session_id: uuid.UUID, body: Selector) -> dict[str, str]:
+        Human(str(session_id)).check(body.selector, True)
+        return {"ok": "true"}
+
+    @router.post("/human/{session_id}/value")
+    def value(session_id: uuid.UUID, body: Selector) -> dict[str, object]:
+        human = Human(str(session_id))
+        return {"value": human.value(body.selector)}
+
+    @router.post("/human/{session_id}/checked")
+    def checked(session_id: uuid.UUID, body: Selector) -> dict[str, object]:
+        return {"checked": Human(str(session_id)).is_checked(body.selector)}
+
+    @router.post("/human/{session_id}/files")
+    def files(session_id: uuid.UUID, body: Selector) -> dict[str, object]:
+        return {"files": Human(str(session_id)).files(body.selector)}
+
+    @router.post("/human/{session_id}/goto")
+    def goto(session_id: uuid.UUID, body: Goto) -> dict[str, str]:
+        Human(str(session_id)).goto(body.url)
+        return {"ok": "true"}
+
+    @router.get("/site")
+    def stats() -> dict[str, object]:
+        stats_: dict[str, object] = site.stats()
+        return stats_
+
+    return router
+
+
 def main() -> None:
     default = make_url(settings.DATABASE_URL)
     url = os.environ.get(
@@ -73,6 +139,7 @@ def main() -> None:
     from app.schemas.question_ai import AIQuestionAnswer
     from app.schemas.resume_profile import ParsedResume
     from app.services.job_discovery.registry import get_job_source_registry
+    from tests.fake_site import FakeApplicationSite
     from tests.humanize_helpers import FakeHumanizeAI
     from tests.job_helpers import (
         FakeJobBoards,
@@ -80,6 +147,13 @@ def main() -> None:
         greenhouse_job,
         lever_posting,
     )
+
+    site = FakeApplicationSite(port=int(os.environ.get("E2E_SITE_PORT", "8765"))).start()
+    settings.AUTOMATION_BROWSER_HEADLESS = True
+    settings.AUTOMATION_ALLOW_PRIVATE_HOSTS = True
+    chromium = os.environ.get("E2E_CHROMIUM_PATH")
+    if chromium:
+        settings.AUTOMATION_CHROMIUM_PATH = chromium
 
     boards = FakeJobBoards()
     registry = cross_source_registry(
@@ -117,6 +191,40 @@ def main() -> None:
 
     stub = E2EStubAI()
     app.dependency_overrides[get_ai_provider] = lambda: stub
+    app.include_router(_human_router(site))
+
+    from fastapi import APIRouter
+
+    vacancies = APIRouter(prefix="/e2e")
+
+    @vacancies.post("/browser-vacancies")
+    def browser_vacancies() -> dict[str, str]:
+        """Publish the two vacancies whose application page is the fake employer site. They
+        appear only when the V0.10 spec asks, so earlier specs see the jobs they always saw."""
+        boards.greenhouse_board(
+            "example",
+            jobs={
+                "jobs": [
+                    greenhouse_job(7001),
+                    greenhouse_job(
+                        7002,
+                        title="Platform Engineer",
+                        location="Hamburg, Germany",
+                        url=site.url("/apply"),
+                    ),
+                    greenhouse_job(
+                        7003,
+                        title="Security Analyst",
+                        location="Bremen, Germany",
+                        url=site.url("/challenge"),
+                    ),
+                ]
+            },
+            board={"name": "Example GmbH"},
+        )
+        return {"ok": "true"}
+
+    app.include_router(vacancies)
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("E2E_API_PORT", "8000")))
 
 

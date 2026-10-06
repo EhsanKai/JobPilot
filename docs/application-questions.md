@@ -55,7 +55,7 @@ to AI assistance later. Concretely:
 | Application question | suggestion (`ai_*`) | answer (`final_*`) | a new suggestion never changes the answer |
 | Tailored CV / Anschreiben | `ai` / `humanized` versions | `user_edited` versions | a new AI version never *silently* supersedes the user's edit, and never deletes it |
 | CV photo | — | the user's own file | no AI operation can read, write or replace it |
-| Browser-filled field (V0.10) | filled value | what the user sees and may edit before submission | same pattern |
+| Browser-filled field (V0.10) | filled value | what the user sees and may edit before submission | same pattern; only approved answers are filled, a field the user edited is never overwritten |
 
 This is the **Human Control Boundary**: every AI-generated artifact has a
 user-owned final representation, kept apart from the AI's, and the only way
@@ -540,7 +540,7 @@ downgrade → upgrade → `alembic check` clean.
 
 | Deferred to | Feature |
 | --- | --- |
-| V0.10 | browser automation, discovering questions from application forms (`source`, `external_key`, `field_name`, `source_metadata` are ready), filling fields, user takeover in the browser |
+| V0.10 (built) | browser automation, discovering questions from application forms (`source = "browser"`, `external_key`, `field_name`, `source_metadata` — filled as designed, no schema change to this model), filling fields, user takeover in the browser: see [`browser-automation.md`](browser-automation.md) |
 | V0.11 | review and submission |
 | V0.12 | the application lifecycle and tracking |
 | later | PDF / DOCX export, a rich document editor, image editing, importing questions |

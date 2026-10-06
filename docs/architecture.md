@@ -1,9 +1,11 @@
-# JobPilot Architecture — V0 to V0.9
+# JobPilot Architecture — V0 to V0.10
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.9 Application Question AI + Human
+to build on them without a rewrite. V0.10 Browser Automation (the browser
+assistant) is summarized in §21 and documented in full in
+[`browser-automation.md`](browser-automation.md). V0.9 Application Question AI + Human
 Control is summarized in §20 and documented in full in
 [`application-questions.md`](application-questions.md).
 V0.8 Tailored CV & Anschreiben generation
@@ -799,9 +801,55 @@ schema). API: `/applications/{id}/questions…`, `…/documents/cover-letter/hum
 `…/documents/{id}/edit`, `…/cv-photo`. UI: *Application questions* section, section
 navigation, Humanize / Edit / Copy / Download / photo in *Documents*.
 
-### 20.6 Preparing V0.10 (not built)
+### 20.6 Preparing V0.10 (built — see §21)
 
-Browser automation will *populate* `ApplicationQuestion` (`source` = a neutral label,
-`external_key` / `field_name` / `source_metadata` from the form), reuse the existing
-suggestion → review → accept flow, fill only the user's reviewed final answers, and
-keep the user able to edit every field before anything is submitted.
+Browser automation *populates* `ApplicationQuestion` (`source = "browser"`,
+`external_key` / `field_name` / `source_metadata` from the form), reuses the existing
+suggestion → review → accept flow, fills only answers the user approved, and keeps the
+user able to edit every field before anything is submitted.
+
+## 21. V0.10 — Browser Automation & Human-Controlled Application Filling
+
+Full documentation: [`browser-automation.md`](browser-automation.md).
+
+> **JobPilot fills forms; the user remains in control.**
+
+```
+Application ─► AutomationSession ─► BrowserSession ─► BrowserPage        (Chromium; Playwright only inside browser/)
+                     │                                     │
+                     │                          FormDiscovery ─► DiscoveredField[]
+                     │                                     │
+                     ├─► AutomationField ◄── FieldMapper ──┴─► ApplicationQuestion (V0.9, source = "browser")
+                     └─► AutomationEvent                       │
+                                                  AnswerResolver ─► BrowserFiller ─► write · read back · verify
+```
+
+- **Human control is structural.** `pause` / `take-control` / `stop` change the session's
+  status, and every page write first locks the session row `FOR SHARE` and requires
+  `RUNNING`; the three actions take the row exclusively, so after one returns nothing else
+  is written. The assistant never overwrites a field the user changed (a salted hash of
+  what it last wrote tells "still mine" from "edited"), and resuming reads the page before
+  it fills anything.
+- **No submission, by construction.** The browser interface (`BrowserPage`) can read, type,
+  choose, check and attach — it has no click or key press, so no code on top of it can press
+  *Submit*. Final actions (English and German) are recognized, never pressed, and the user is
+  told to submit manually. `SUBMIT_ACTIONS_ALLOWED = False`; tests run the full flow against
+  a page whose submit button counts every click.
+- **No Playwright in the domain.** `BrowserDriver` / `BrowserSession` / `BrowserPage` and plain
+  dataclasses are the boundary; Playwright runs on its own thread behind them.
+- **Reuse, not a parallel system.** Discovered fields map to V0.9 `ApplicationQuestion`s
+  (identity by `source` + `external_key`, so rediscovery never duplicates); the V0.9 answer
+  validation stays authoritative; AI is used only to match an ambiguous field to an *existing*
+  question, with structured, confidence-gated, provenance-recorded output.
+- **Approval hierarchy.** the user's answer > deterministic application data > an accepted
+  answer > (unreviewed AI suggestion: shown, never filled) > "needs your input". Legal and
+  consent fields are never ticked.
+- **Hand back, never work around.** A CAPTCHA, a login, a refusal or an unexpected website
+  stops the assistant (`BLOCKED` / `PAUSED`) and returns the browser to the user.
+- **Privacy.** No cookies, tokens, passwords or form values are stored or returned; URLs are
+  stored without query; events and logs hold codes only; screenshots are on-demand and never
+  stored.
+
+Migration `b4e8c2d6a1f9`, purely additive (three tables, three enum types). API:
+`/applications/{id}/automation/…`. UI: the *Browser assistant* section of the workspace.
+
