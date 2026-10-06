@@ -219,16 +219,19 @@ def _replay(
     assert db.execute(select(func.count()).select_from(Job)).scalar_one() == jobs
     assert db.execute(select(func.count()).select_from(JobSourcePosting)).scalar_one() == postings
 
-    # Disappearance, simulated on the captured listing (never on the real board).
-    if len(items) > 1 and summary["invalid"] == 0:
-        serve(items[1:])
+    # Disappearance, simulated on the captured listing (never on the real
+    # board): drop one posting that was actually stored (large boards exceed
+    # the run limit, so not every listed posting is), on a complete listing.
+    stored_ids = set(db.execute(select(JobSourcePosting.source_job_id)).scalars())
+    gone = next((i for i in items if str(i.get("id")) in stored_ids), None)
+    if gone is not None and summary["invalid"] == 0:
+        serve([i for i in items if i is not gone])
         _discover(client, auth, source)
         db.expire_all()
         inactive = db.execute(
-            select(func.count()).select_from(JobSourcePosting)
-            .where(JobSourcePosting.is_active.is_(False))
-        ).scalar_one()
-        assert inactive >= 1
+            select(JobSourcePosting.source_job_id).where(JobSourcePosting.is_active.is_(False))
+        ).scalars().all()
+        assert inactive == [str(gone["id"])]
 
 
 @pytest.mark.skipif(not GREENHOUSE_CAPTURES, reason=NO_CAPTURE)
