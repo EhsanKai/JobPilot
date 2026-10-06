@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     AI_MAX_RETRIES: int = 2
     AI_MAX_OUTPUT_TOKENS: int = 16000
 
+    # Tailored documents (V0.8). A generation still "in progress" after this
+    # many minutes (e.g. the server restarted mid-request) is treated as
+    # failed, so the UI never waits on it forever and a new one may start.
+    DOCUMENT_GENERATION_STALE_MINUTES: int = 10
+
     # Resume Intelligence limits. Text longer than this is rejected rather
     # than silently truncated (truncation would silently drop facts).
     RESUME_MAX_TEXT_CHARS: int = 60000

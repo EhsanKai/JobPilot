@@ -26,6 +26,7 @@ from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.application_context_snapshot import ApplicationContextSnapshot
+    from app.models.generated_document import GeneratedDocument
     from app.models.job import Job
     from app.models.job_source_posting import JobSourcePosting
     from app.models.resume import Resume
@@ -88,6 +89,7 @@ class Application(Base, TimestampMixin):
                      +-- ApplicationContextSnapshot   what the job was, when it was started
                      +-- preparation data             salary, availability, language, notes...
                      +-- resume reference             which resume version it builds on
+                     +-- GeneratedDocument (many)     tailored CV / Anschreiben, V0.8
 
     Starting an application is an explicit user action; a match, a saved job
     or an opened job never creates one. `user_job_id` is unique, so a job has
@@ -121,6 +123,8 @@ class Application(Base, TimestampMixin):
             name="fk_applications_user_job",
         ),
         UniqueConstraint("user_job_id", name="uq_applications_user_job_id"),
+        # The target of generated_documents' composite ownership key (V0.8).
+        UniqueConstraint("id", "user_id", name="uq_applications_id_user_id"),
         CheckConstraint(
             "salary_expectation IS NULL OR salary_expectation >= 0",
             name="ck_applications_salary_expectation",
@@ -211,4 +215,11 @@ class Application(Base, TimestampMixin):
         uselist=False,
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    # Tailored documents generated for this application (V0.8), every attempt.
+    documents: Mapped[list["GeneratedDocument"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="GeneratedDocument.created_at",
     )

@@ -7,6 +7,7 @@
     V0.5 data  -> upgrade -> downgrade -> upgrade    (V0.6 roundtrip, additive)
     V0.6 data  -> upgrade -> downgrade -> upgrade    (V0.7 roundtrip, application workspace)
     V0 data    -> upgrade head                       (V0 application gets its UserJob + context)
+    V0.7 data  -> upgrade -> downgrade -> upgrade    (V0.8 roundtrip, tailored documents)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -44,6 +45,7 @@ V04 = "d4a7e3b9c2f1"  # also the V0.4.1 schema (V0.4.1 added no migration)
 V05 = "a56b296b53a5"
 V06 = "c7d2e9f4b1a6"
 V07 = "e8b3c1a5d7f2"
+V08 = "f1a6d3c8b2e4"
 
 USER_ID = uuid.UUID("00000000-0000-4000-8000-0000000000a1")
 GH_JOB = uuid.UUID("00000000-0000-4000-8000-0000000000b1")
@@ -997,7 +999,7 @@ def test_v06_data_survives_v07_upgrade_downgrade_upgrade(migration_db: Engine) -
     }]
 
     # V0.6 -> V0.7 again: both rows are attached and get a (migrated) context.
-    command.upgrade(config, "head")
+    command.upgrade(config, V07)
     assert_v07_schema(migration_db)
     assert_legacy_application_migrated(migration_db)
     assert rows(
@@ -1113,3 +1115,226 @@ def test_v07_stops_on_rows_it_cannot_attach_and_changes_nothing(
     assert data_fingerprints(migration_db, tables) == data_before
     assert schema_fingerprint(migration_db, tables) == schema_before
     assert enum_values(migration_db) == enums_before
+
+
+# --- V0.8: tailored documents ---------------------------------------------------------------------
+
+V08_ENUMS = {
+    "generated_document_type": ["TAILORED_CV", "COVER_LETTER"],
+    "generated_document_status": ["GENERATING", "VALIDATED", "REJECTED", "FAILED"],
+}
+V08_CONSTRAINTS = {
+    "fk_generated_documents_application": "FOREIGN KEY (application_id, user_id) "
+    "REFERENCES applications(id, user_id) ON DELETE CASCADE",
+    "uq_generated_documents_version": "UNIQUE (application_id, document_type, version_number)",
+    "generated_documents_user_id_fkey": "FOREIGN KEY (user_id) REFERENCES users(id) "
+    "ON DELETE CASCADE",
+    "generated_documents_resume_id_fkey": "FOREIGN KEY (resume_id) REFERENCES resumes(id) "
+    "ON DELETE SET NULL",
+    "generated_documents_resume_profile_id_fkey": "FOREIGN KEY (resume_profile_id) "
+    "REFERENCES resume_profiles(id) ON DELETE SET NULL",
+    "generated_documents_application_context_snapshot_id_fkey": "FOREIGN KEY "
+    "(application_context_snapshot_id) REFERENCES application_context_snapshots(id) "
+    "ON DELETE CASCADE",
+    "uq_applications_id_user_id": "UNIQUE (id, user_id)",
+}
+V08_CHECKS = {
+    "ck_generated_documents_version_iff_validated",
+    "ck_generated_documents_content_iff_validated",
+    "ck_generated_documents_version_number",
+    "ck_generated_documents_language",
+}
+V08_INDEXES = {
+    "generated_documents_pkey",
+    "uq_generated_documents_version",
+    "uq_generated_documents_one_in_flight",
+    "ix_generated_documents_application_type_created",
+    "ix_generated_documents_user_id",
+    "ix_generated_documents_resume_id",
+    "ix_generated_documents_resume_profile_id",
+    "ix_generated_documents_application_context_snapshot_id",
+}
+DOCUMENT_IDS = [uuid.UUID(f"00000000-0000-4000-8000-0000000000d{n}") for n in range(1, 6)]
+
+
+def build_v07_database(engine: Engine, config: Config) -> None:
+    """A V0.7 database with realistic application data: the V0 placeholder row
+    (migrated by V0.7) and an application V0.7 itself created, each with its
+    context snapshot, preparation data, and a resume."""
+    build_v06_database(engine, config)
+    command.upgrade(config, V07)
+    execute(
+        engine,
+        "INSERT INTO applications (id, user_id, job_id, user_job_id, status, notes, "
+        "application_language, notice_period_value, notice_period_unit, "
+        "mention_salary_in_letter, available_from, salary_expectation, salary_currency) "
+        "SELECT :id, :user, :job, uj.id, 'PREPARING', 'private note', 'de', 3, 'MONTHS', true, "
+        "'2027-01-01', 78000, 'EUR' FROM user_jobs uj "
+        "WHERE uj.user_id = :user AND uj.job_id = :job",
+        id=V07_ONLY_APPLICATION,
+        user=USER_ID,
+        job=LEVER_JOB,
+    )
+    execute(
+        engine,
+        "INSERT INTO application_context_snapshots "
+        "(id, application_id, schema_version, content_hash, document) "
+        "SELECT gen_random_uuid(), :new, schema_version, content_hash, document "
+        "FROM application_context_snapshots WHERE application_id = :legacy",
+        new=V07_ONLY_APPLICATION,
+        legacy=APPLICATION_ID,
+    )
+
+
+def insert_document(
+    engine: Engine,
+    document_id: uuid.UUID,
+    *,
+    application: uuid.UUID,
+    kind: str = "TAILORED_CV",
+    status: str = "VALIDATED",
+    version: int | None = 1,
+    content: str | None = "{}",
+    user: uuid.UUID = USER_ID,
+) -> None:
+    execute(
+        engine,
+        "INSERT INTO generated_documents (id, application_id, user_id, document_type, status, "
+        "version_number, language, application_context_snapshot_id, input_hash, prompt_version, "
+        "ai_provider, source_facts, content) "
+        "SELECT :id, :application, :user, :kind, :status, :version, 'de', s.id, repeat('a', 64), "
+        "'tailored_cv_v1', 'fake', '{}'::jsonb, CAST(:content AS jsonb) "
+        "FROM application_context_snapshots s WHERE s.application_id = :application",
+        id=document_id,
+        application=application,
+        user=user,
+        kind=kind,
+        status=status,
+        version=version,
+        content=content,
+    )
+
+
+def assert_v08_schema(engine: Engine) -> None:
+    assert "generated_documents" in user_tables(engine)
+    enums = enum_values(engine)
+    for name, values in V08_ENUMS.items():
+        assert enums[name] == values, name
+    constraints = {
+        r["conname"]: r["definition"]
+        for r in rows(
+            engine,
+            "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid IN ('generated_documents'::regclass, 'applications'::regclass)",
+        )
+    }
+    for name, definition in V08_CONSTRAINTS.items():
+        assert constraints.get(name) == definition, name
+    assert V08_CHECKS <= set(constraints)
+    indexes = {
+        r["indexname"]: r["indexdef"]
+        for r in rows(
+            engine,
+            "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'generated_documents'",
+        )
+    }
+    assert set(indexes) == V08_INDEXES
+    # one generation in flight per application and type, and nothing else
+    one_in_flight = indexes["uq_generated_documents_one_in_flight"]
+    assert "UNIQUE" in one_in_flight and "WHERE" in one_in_flight and "GENERATING" in one_in_flight
+    columns = {
+        r["column_name"]: r["is_nullable"]
+        for r in rows(
+            engine,
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'generated_documents'",
+        )
+    }
+    for required in (
+        "application_id", "user_id", "document_type", "status", "language",
+        "application_context_snapshot_id", "input_hash", "prompt_version", "ai_provider",
+        "source_facts",
+    ):
+        assert columns[required] == "NO", required
+    for optional in ("version_number", "resume_id", "resume_profile_id", "ai_model", "content"):
+        assert columns[optional] == "YES", optional
+
+
+def test_v07_data_survives_v08_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v07_database(migration_db, config)
+
+    v07_tables = user_tables(migration_db)
+    assert "generated_documents" not in v07_tables
+    data_before = data_fingerprints(migration_db, v07_tables)
+    schema_before = schema_fingerprint(migration_db, v07_tables)
+    enums_before = enum_values(migration_db)
+    assert data_before["applications"][0] == 2
+    assert data_before["application_context_snapshots"][0] == 2
+
+    # V0.7 -> V0.8: purely additive. Not one existing row changes.
+    command.upgrade(config, V08)
+    assert user_tables(migration_db) == v07_tables | {"generated_documents"}
+    assert data_fingerprints(migration_db, v07_tables) == data_before
+    assert_v08_schema(migration_db)
+    assert {k: v for k, v in enum_values(migration_db).items() if k not in V08_ENUMS} == (
+        enums_before
+    )
+    assert rows(migration_db, "SELECT count(*) AS n FROM generated_documents") == [{"n": 0}]
+
+    # The new table works against migrated V0.7 applications.
+    insert_document(migration_db, DOCUMENT_IDS[0], application=APPLICATION_ID)
+    insert_document(migration_db, DOCUMENT_IDS[1], application=APPLICATION_ID, version=2)
+    insert_document(
+        migration_db, DOCUMENT_IDS[2], application=V07_ONLY_APPLICATION, kind="COVER_LETTER"
+    )
+    insert_document(
+        migration_db, DOCUMENT_IDS[3], application=APPLICATION_ID, status="FAILED",
+        version=None, content=None,
+    )
+    for bad, message in (
+        ({"version": 1}, "uq_generated_documents_version"),  # a version is used once
+        ({"user": uuid.uuid4(), "version": 7}, "fk_generated_documents_application"),
+        (
+            {"status": "FAILED", "version": 7, "content": None},
+            "ck_generated_documents_version_iff_validated",
+        ),
+        (
+            {"status": "FAILED", "version": None, "content": "{}"},
+            "ck_generated_documents_content_iff_validated",
+        ),
+    ):
+        with pytest.raises(Exception, match=message):
+            insert_document(migration_db, DOCUMENT_IDS[4], application=APPLICATION_ID, **bad)
+
+    # V0.8 -> V0.7: exactly the V0.7 schema again. Documents are lost; every
+    # V0.7 row (applications and snapshots included) is kept as it was.
+    command.downgrade(config, V07)
+    assert user_tables(migration_db) == v07_tables
+    assert schema_fingerprint(migration_db, v07_tables) == schema_before
+    assert enum_values(migration_db) == enums_before
+    assert data_fingerprints(migration_db, v07_tables) == data_before
+
+    # V0.7 -> V0.8 again, then the schema is exactly what the models declare.
+    command.upgrade(config, "head")
+    assert_v08_schema(migration_db)
+    assert data_fingerprints(migration_db, v07_tables) == data_before
+    assert rows(migration_db, "SELECT count(*) AS n FROM generated_documents") == [{"n": 0}]
+    with migration_db.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == []
+
+
+def test_deleting_an_application_user_or_snapshot_removes_its_documents(
+    migration_db: Engine,
+) -> None:
+    config = alembic_config()
+    build_v07_database(migration_db, config)
+    command.upgrade(config, V08)
+    insert_document(migration_db, DOCUMENT_IDS[0], application=APPLICATION_ID)
+    insert_document(migration_db, DOCUMENT_IDS[1], application=V07_ONLY_APPLICATION)
+
+    execute(migration_db, "DELETE FROM applications WHERE id = :id", id=APPLICATION_ID)
+    assert rows(migration_db, "SELECT id FROM generated_documents") == [{"id": DOCUMENT_IDS[1]}]
+    execute(migration_db, "DELETE FROM users WHERE id = :id", id=USER_ID)
+    assert rows(migration_db, "SELECT id FROM generated_documents") == []

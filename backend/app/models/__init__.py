@@ -11,6 +11,11 @@ from app.models.candidate_profile_version import (
 )
 from app.models.deal_breaker import DealBreaker, DealBreakerType
 from app.models.discovery_run import DiscoveryRun, DiscoveryRunStatus
+from app.models.generated_document import (
+    GeneratedDocument,
+    GeneratedDocumentStatus,
+    GeneratedDocumentType,
+)
 from app.models.industry import Industry, UserIndustry
 from app.models.job import Job, SalaryPeriod
 from app.models.job_intelligence import JobIntelligence
@@ -86,6 +91,9 @@ __all__ = [
     "NoticePeriodUnit",
     "WorkAuthorization",
     "ApplicationContextSnapshot",
+    "GeneratedDocument",
+    "GeneratedDocumentType",
+    "GeneratedDocumentStatus",
     "CandidateProfileVersion",
     "CandidateProfileVersionReason",
     "JobIntelligence",
