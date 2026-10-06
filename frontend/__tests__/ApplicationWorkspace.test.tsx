@@ -13,15 +13,22 @@ import {
   makeProgress,
   makeResume,
 } from "./fixtures/application";
+import { blocked, makeList } from "./fixtures/documents";
 import { makeMatchSummary } from "./fixtures/match";
 
 const getApplicationMock = vi.fn();
 const updateApplicationMock = vi.fn();
 const listResumesMock = vi.fn();
+const listDocumentsMock = vi.fn();
 
 vi.mock("@/lib/api/applications", () => ({
   getApplication: (...args: unknown[]) => getApplicationMock(...args),
   updateApplication: (...args: unknown[]) => updateApplicationMock(...args),
+}));
+vi.mock("@/lib/api/documents", () => ({
+  listDocuments: (...args: unknown[]) => listDocumentsMock(...args),
+  getDocument: vi.fn(),
+  generateDocument: vi.fn(),
 }));
 vi.mock("@/lib/api/resumes", () => ({
   listResumes: (...args: unknown[]) => listResumesMock(...args),
@@ -43,6 +50,8 @@ describe("ApplicationWorkspace", () => {
     updateApplicationMock.mockReset();
     listResumesMock.mockReset();
     listResumesMock.mockResolvedValue([makeResume()]);
+    listDocumentsMock.mockReset();
+    listDocumentsMock.mockResolvedValue(makeList());
   });
 
   describe("loading and loading failures", () => {
@@ -664,6 +673,82 @@ describe("ApplicationWorkspace", () => {
         "href",
         "/jobs/job-1"
       );
+    });
+  });
+
+  describe("documents", () => {
+    it("has a Documents section below the preparation form", async () => {
+      await renderWorkspace(makePreparedApplication());
+
+      expect(await screen.findByRole("heading", { level: 2, name: "Documents" })).toBeInTheDocument();
+      expect(listDocumentsMock).toHaveBeenCalledWith("app-1");
+      expect(screen.getByRole("button", { name: "Generate CV" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Generate Anschreiben" })).toBeEnabled();
+      const preparation = screen.getByRole("form", { name: "Application preparation" });
+      expect(preparation.contains(screen.getByRole("heading", { name: "Documents" }))).toBe(false);
+    });
+
+    it("says the documents are written in the saved application language", async () => {
+      await renderWorkspace(makePreparedApplication({ application_language: "en" }));
+      expect(await screen.findByText(/and written in English/)).toBeInTheDocument();
+    });
+
+    it("re-reads what documents need after the application is saved", async () => {
+      const user = userEvent.setup();
+      await renderWorkspace(makePreparedApplication({ mention_salary_in_letter: null }));
+      listDocumentsMock.mockResolvedValue(
+        makeList([], {
+          cover_letter: blocked(["SALARY_DECISION_REQUIRED", "Choose Yes or No first."]),
+        })
+      );
+      listDocumentsMock.mockClear();
+      updateApplicationMock.mockResolvedValue(
+        makePreparedApplication({ mention_salary_in_letter: false, updated_at: "2026-10-03T09:00:00Z" })
+      );
+      listDocumentsMock.mockResolvedValue(makeList());
+
+      await user.selectOptions(screen.getByLabelText(/Mention salary/), "no");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      await waitFor(() => expect(listDocumentsMock).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText("Application saved.")).toBeInTheDocument();
+    });
+
+    it("blocks generating while the form has unsaved changes", async () => {
+      const user = userEvent.setup();
+      await renderWorkspace(makePreparedApplication());
+      expect(await screen.findByRole("button", { name: "Generate CV" })).toBeEnabled();
+
+      await user.type(screen.getByLabelText("Private notes"), " more");
+
+      expect(screen.getByText(/You have unsaved changes\. Documents use your saved/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Generate CV" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Generate Anschreiben" })).toBeDisabled();
+    });
+
+    it("shows what blocks the Anschreiben when the salary mention is undecided", async () => {
+      listDocumentsMock.mockResolvedValue(
+        makeList([], {
+          cover_letter: blocked([
+            "SALARY_DECISION_REQUIRED",
+            "You set a salary expectation but haven't decided whether the letter should mention it.",
+          ]),
+        })
+      );
+      await renderWorkspace(makePreparedApplication({ mention_salary_in_letter: null }));
+
+      expect(await screen.findByText("A salary decision is needed first.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Generate Anschreiben" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Generate CV" })).toBeEnabled();
+    });
+
+    it("keeps the workspace usable when documents can't be loaded", async () => {
+      listDocumentsMock.mockRejectedValue(new ApiError(500, "INTERNAL_ERROR", "boom", {}));
+      await renderWorkspace();
+
+      expect(await screen.findByText("Unable to load your documents. Please try again.")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+      expect(screen.getByLabelText("Private notes")).toBeInTheDocument();
     });
   });
 

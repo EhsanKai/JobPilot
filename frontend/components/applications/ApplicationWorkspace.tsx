@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
+import { ApplicationDocuments } from "@/components/applications/ApplicationDocuments";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -265,8 +266,8 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
                 </select>
                 <FieldError field="mentionSalary" errors={fieldErrors} />
                 <p className="text-xs text-slate-400">
-                  Your decision, saved for later: JobPilot doesn&apos;t write cover letters yet, and
-                  nothing is chosen for you.
+                  Your decision: the Anschreiben only states your salary expectation if you choose
+                  Yes, and nothing is chosen for you.
                 </p>
               </div>
 
@@ -425,7 +426,7 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
               )}
               <p className="mt-3 text-xs text-slate-400">
                 This application keeps the version it was started with: uploading a newer resume
-                doesn&apos;t change it. JobPilot doesn&apos;t generate a tailored CV yet.
+                doesn&apos;t change it. Tailored documents are built from this version.
               </p>
             </Card>
 
@@ -469,6 +470,13 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
               </div>
             </div>
           </form>
+
+          <ApplicationDocuments
+            applicationId={application.id}
+            language={application.application_language}
+            reloadKey={application.updated_at}
+            hasUnsavedChanges={dirty}
+          />
         </div>
 
         <aside className="flex flex-col gap-6">
