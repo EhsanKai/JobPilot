@@ -18,7 +18,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.6)
+## 2. Current scope (V0 – V0.7)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -173,6 +173,21 @@ the result in plain words and is validated against it. Results are
 per-user, versioned, and marked as outdated when your profile, the job or
 the model changes. See [`docs/job-matching.md`](docs/job-matching.md).
 
+V0.7 adds the **Application Workspace & Application Preparation Foundation**.
+A job match is not an application: only when you explicitly choose **Start
+Application** on a job does JobPilot create your private workspace for it —
+exactly one per job, owned by you, and nothing is submitted or sent to anyone.
+The workspace (`/applications/[id]`) shows the job as it was when you started
+(with its original posting link), and stores what is specific to *this*
+application: salary expectation, whether to mention it in the cover letter,
+availability, notice period, work authorization, application language, the
+resume version it builds on, and private notes — separate from your profile and
+preferences, which it never changes. The job and source posting are captured in
+a write-once snapshot, so later versions can reproduce what you applied to even
+after the posting changes. V0.7 contains **no** CV or cover-letter generation,
+AI, browser automation, auto-fill or submission — those are V0.8 and later. See
+[`docs/application-workspace.md`](docs/application-workspace.md).
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -191,7 +206,8 @@ the model changes. See [`docs/job-matching.md`](docs/job-matching.md).
 ```
 jobpilot/
 ├── frontend/           Next.js app (App Router)
-│   ├── app/            Routes: /, /login, /register, /dashboard, /profile, /jobs, ...
+│   ├── app/            Routes: /, /login, /register, /dashboard, /profile, /jobs,
+│   │                     /applications/[id], ...
 │   ├── components/     Reusable UI, auth, profile, resume, dashboard components
 │   ├── lib/             API client, auth token storage, typed API calls
 │   ├── types/           Shared TypeScript types mirroring backend schemas
@@ -202,14 +218,16 @@ jobpilot/
 │   │   ├── ai/          AI provider abstraction, providers, versioned prompts
 │   │   ├── api/v1/      Routers: auth, users, profile (+ skills/languages/
 │   │   │                  completeness), preferences (+ job-titles/locations),
-│   │   │                  resumes (+ Resume Intelligence), jobs (V0.3)
+│   │   │                  resumes (+ Resume Intelligence), jobs (V0.3),
+│   │   │                  matching (V0.6), applications (V0.7)
 │   │   ├── core/        Config, security, logging, error handling
 │   │   ├── db/          SQLAlchemy base + session
 │   │   ├── models/      SQLAlchemy models
 │   │   ├── schemas/     Pydantic request/response schemas
 │   │   └── services/    Business logic, storage abstraction, resume_intelligence/
 │   │                      pipeline, job_discovery/ (sources, normalizer,
-│   │                      normalization/, deduplication/, discovery)
+│   │                      normalization/, deduplication/, discovery),
+│   │                      matching/ (V0.6), applications/ (V0.7)
 │   ├── alembic/         Database migrations
 │   ├── e2e/             Backend launcher for real-browser E2E (mock job boards)
 │   └── tests/           Pytest suite
@@ -218,7 +236,9 @@ jobpilot/
 │   ├── architecture.md
 │   ├── resume-intelligence.md
 │   ├── job-discovery.md
-│   └── job-intelligence.md
+│   ├── job-intelligence.md
+│   ├── job-matching.md
+│   └── application-workspace.md
 │
 ├── docker-compose.yml   PostgreSQL (dev infrastructure)
 ├── .env.example
@@ -360,7 +380,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.6)
+## 12. API endpoints (V0 – V0.7)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -421,10 +441,16 @@ GET    /jobs/{id}/match                 your match: not_calculated | calculated 
 POST   /jobs/{id}/match                 calculate / recalculate (deterministic, no AI)
 POST   /jobs/match                      batch: {"job_ids": [...≤25]} or {"limit": n}; no AI
 POST   /jobs/{id}/match/explanation     optional AI explanation, validated and cached
+
+POST   /jobs/{id}/application           Start Application (V0.7): 201 new, or 200 the existing one
+GET    /applications                    your applications (page, page_size)
+GET    /applications/{id}               workspace: preparation data, job context, resume, match, progress
+PATCH  /applications/{id}               update application-specific data (partial; null clears)
 ```
 
 `GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
-`null`); `GET /jobs?sort=match` lists the best Overall Match first.
+`null`) and your `application` (`{id, status}` or `null`);
+`GET /jobs?sort=match` lists the best Overall Match first.
 
 Note: `PUT /preferences` and `PUT /profile` replace the fields they cover in
 full. The frontend always round-trips the job titles/locations it isn't
@@ -443,7 +469,7 @@ V0.4   Job Intelligence & Cross-Source Normalization   ✅
 V0.5   Matching foundations        ✅ (V0.5.0 data model, V0.5.1 taxonomy)
 V0.6   Job Matching & Explainability   ✅
        Job Dashboard / MVP
-V0.7   Application Workspace
+V0.7   Application Workspace        ✅
 V0.8   Tailored CV + Anschreiben
 V0.9   Application Question AI
 V0.10  Browser Automation

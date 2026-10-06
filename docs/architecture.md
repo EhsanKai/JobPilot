@@ -1,9 +1,12 @@
-# JobPilot Architecture — V0 to V0.6
+# JobPilot Architecture — V0 to V0.7
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.6 Job Matching & Explainability is
+to build on them without a rewrite. V0.7 Application Workspace is
+summarized in §18 and documented in full in
+[`application-workspace.md`](application-workspace.md).
+V0.6 Job Matching & Explainability is
 summarized in §17 and documented in full in [`job-matching.md`](job-matching.md).
 The V0.5.1 taxonomy & deterministic
 normalization foundation is summarized in §16 and documented in
@@ -27,8 +30,10 @@ Job Sources → Connectors → Normalized Job Model → Matching Engine → Appl
 V0 implemented the data model at the "Normalized Job Model" stage (the
 `jobs` and `applications` tables). V0.3 implements the first two stages:
 real `JobSource` connectors and the normalized, deduplicated `Job` model
-(§13). No matching engine or application engine logic exists yet — they are
-later versions. The point of building the
+(§13). The matching engine arrived in V0.6 (§17); the Application Engine
+starts with V0.7's Application Workspace (§18), which only *prepares* an
+application — tailored documents, automation and submission are later
+versions. The point of building the
 interface now is that `app/api`, `app/services`, and the database schema
 never need to know which job source or AI provider is behind them.
 
@@ -108,9 +113,10 @@ The schema is normalized rather than storing lists as delimited strings:
 - `jobs` — the canonical job posting. A foundation table in V0; since V0.3
   populated by Job Discovery and global (one row per posting), with
   per-user state in `user_jobs` (§13).
-- `applications` — a foundation table for the future application workflow
-  (status, salary expectation, start date). No document generation or
-  submission logic exists yet.
+- `applications` — a foundation table in V0 (status, salary expectation,
+  start date); since V0.7 the user's private Application Workspace, exactly
+  one per `user_jobs` row (§18). It never generates documents or submits
+  anything.
 
 Migrations are managed with Alembic (`backend/alembic/`). The initial
 migration creates the V0 schema; a second migration adds the V0.1 entities
@@ -563,3 +569,67 @@ Canonical Job -> job_intelligence + requirements ┘        │
 - Not in V0.6: browser automation, auto-fill, application submission, CV /
   cover-letter generation, auto-apply.
 
+## 18. V0.7 — Application Workspace & Application Preparation Foundation
+
+Full documentation: [`application-workspace.md`](application-workspace.md).
+
+```
+User
+ │
+ └── UserJob
+      │
+      ├── MatchResult                              (V0.6, job_matches)
+      │
+      └── Application                              (V0.7, applications)
+           ├── ApplicationContextSnapshot          application_context_snapshots
+           ├── PreparationData                     columns of applications
+           └── ResumeReference                     applications.resume_id -> resumes
+```
+
+- **A match is not an application.** An application exists only after the
+  user explicitly chooses *Start Application*. Opening, saving or matching a
+  job never creates one, and starting one submits nothing.
+- **Exactly one Application per UserJob.** `unique(user_job_id)` makes the
+  database refuse duplicates, so double clicks and concurrent requests open
+  the same application. Starting is idempotent (201 on creation, 200 when it
+  exists).
+- **Ownership through the UserJob.** `current_user -> UserJob ->
+  Application`. A composite foreign key `(user_job_id, user_id)` stops an
+  application from referencing another user's UserJob; another user's
+  application is a 404, like one that doesn't exist.
+- **The V0 table was evolved in place** (`start_date` became `available_from`;
+  `salary_expectation`, `salary_currency`, `user_id`, `job_id`, `status` are
+  kept), not duplicated. `PREPARING` is the only status V0.7 uses; the V0
+  lifecycle values stay for V0.12.
+- **Application data is separate from the profile.** Salary expectation, "mention
+  it in the letter", availability, notice period, work authorization,
+  application language and private notes belong to the application; changing
+  them never touches the profile, preferences, job or match, and the user's
+  choices are never defaulted (language and the letter decision start unset).
+- **A write-once context snapshot.** `application_context_snapshots` keeps the
+  job (the canonical content fields of V0.4's snapshot mechanism) and the
+  selected source posting's identity and URLs as they were when the user
+  started — immutable (`ImmutableMixin`), checksummed, and free of anything the
+  user wrote — so later generation can reproduce what the user applied to even
+  after discovery refreshes the job.
+- **Source posting.** The application targets the job's preferred posting (or
+  another of its postings) and keeps the original URL and where applying
+  happens (V0.4's `application_url` rule); the canonical URL is never assumed
+  to be the application URL.
+- **Resume reference, not copy.** `resume_id` points at the resume version the
+  application was started with (default: the confirmed one, as matching uses);
+  uploading a newer resume doesn't change it, and deleting a resume clears the
+  reference but keeps the application.
+- **Deterministic preparation checklist** computed from the data (nothing
+  stored); no workflow engine.
+- **Migration** `e8b3c1a5d7f2`: additive, attaches V0 rows to their UserJob and
+  gives them a snapshot, refuses (rather than guesses) rows that cannot belong
+  to exactly one UserJob, and downgrades to the exact V0.6 schema.
+- **API**: `POST /jobs/{id}/application`, `GET /applications`,
+  `GET/PATCH /applications/{id}`; job list and details carry
+  `application: {id, status} | null`.
+- **UI**: an *Application* card on job details (Start / Continue Application)
+  and the workspace at `/applications/[id]`.
+- Not in V0.7: tailored CV and Anschreiben generation (V0.8), AI application
+  answers (V0.9), browser automation and auto-fill (V0.10), review and
+  submission (V0.11), the full application lifecycle and tracking (V0.12).
