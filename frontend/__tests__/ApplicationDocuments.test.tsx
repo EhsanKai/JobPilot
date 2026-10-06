@@ -567,7 +567,7 @@ describe("ApplicationDocuments", () => {
       expect(view.getByText("Bewerbung als Senior Backend Engineer (Python)")).toBeInTheDocument();
       expect(view.getByText("Sehr geehrte Damen und Herren,")).toBeInTheDocument();
       expect(view.getByText("mit großem Interesse bewerbe ich mich auf die Position.")).toBeInTheDocument();
-      expect(view.getByRole("paragraph", { name: "Salary statement" })).toHaveTextContent(
+      expect(view.getByRole("group", { name: "Salary statement" })).toHaveTextContent(
         "Meine Gehaltsvorstellung liegt bei 78.000 EUR brutto pro Jahr."
       );
       expect(view.getByText("Mit freundlichen Grüßen")).toBeInTheDocument();

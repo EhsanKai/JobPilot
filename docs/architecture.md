@@ -1,9 +1,12 @@
-# JobPilot Architecture — V0 to V0.7
+# JobPilot Architecture — V0 to V0.8
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.7 Application Workspace is
+to build on them without a rewrite. V0.8 Tailored CV & Anschreiben generation
+is summarized in §19 and documented in full in
+[`tailored-documents.md`](tailored-documents.md).
+V0.7 Application Workspace is
 summarized in §18 and documented in full in
 [`application-workspace.md`](application-workspace.md).
 V0.6 Job Matching & Explainability is
@@ -633,3 +636,82 @@ User
 - Not in V0.7: tailored CV and Anschreiben generation (V0.8), AI application
   answers (V0.9), browser automation and auto-fill (V0.10), review and
   submission (V0.11), the full application lifecycle and tracking (V0.12).
+
+## 19. V0.8 — Tailored CV & Anschreiben Generation
+
+Full documentation: [`tailored-documents.md`](tailored-documents.md).
+
+```
+Application
+ │
+ ├── ApplicationContextSnapshot      application_context_snapshots   (V0.7)
+ ├── PreparationData                 columns of applications         (V0.7)
+ ├── ResumeReference                 applications.resume_id          (V0.7)
+ │
+ └── GeneratedDocuments              generated_documents             (V0.8)
+       ├── TailoredCV                v1, v2 ... (validated attempts)
+       └── CoverLetter               v1, v2 ...
+```
+
+```
+Application ─► generation context ─► AIProvider ─► structured output ─► truth validation ─► document
+               (facts, snapshot,                                         (rejects, never
+                preparation data)                                         repairs)
+```
+
+- **Truth first, enforced three ways.** The AI cannot write plain facts
+  (employers, titles, dates, degrees, skill names, contact details are copied
+  by the server from the *confirmed* resume; the output schema has no field for
+  them); everything it does write cites `source_fact_ids`; and a deterministic
+  validator checks that text against the facts it cites — numbers, taxonomy
+  terms, tool-shaped tokens, organizations, leadership / credential /
+  achievement claims, company and personal claims, any pay talk. A document
+  that fails is rejected whole; only a validated result is a document.
+- **Reuse, not duplication.** Facts come from V0.2's confirmed Resume Profile
+  (accepted and edited items only); the job comes from V0.7's context snapshot
+  (no new snapshot mechanism); validation reuses V0.2's `SourceText` matching
+  and V0.6's taxonomy finders; the AI goes through the existing `AIProvider`
+  abstraction, so nothing is coupled to a vendor.
+- **A generation is an attempt, and attempts are never overwritten.**
+  `generated_documents` holds every attempt; validated ones are numbered per
+  application and type, and the highest is current (derived, not stored).
+  Database checks tie `version_number` and `content` to `status = VALIDATED`,
+  so a failed or rejected attempt can never look like a document; a partial
+  unique index allows one in-flight generation per application and type; a
+  finished attempt is write-once, so the AI original is preserved.
+- **Deterministic generation context.** A pure function of named inputs
+  (candidate facts, job snapshot, application data, optionally the current
+  match as hints) — same inputs, same prompt payload, same `input_hash`. The
+  hash is stored with the document, so a document is recognized as *outdated*
+  when its inputs have changed. The AI is never shown contact details, notes,
+  the salary figure or anything else in the database.
+- **Provenance.** Resume version and confirmed profile, context snapshot, input
+  hash, prompt version (`tailored_cv_v1`, `cover_letter_v1`; fingerprinted so a
+  released prompt cannot be silently edited), provider and model, timestamps,
+  the validation report and the text of every fact the AI was given.
+- **Salary is the user's decision.** The letter states the salary only when
+  `mention_salary_in_letter` is true, in a fixed server-built sentence; the AI
+  may not mention pay; an undecided choice (with a salary set) blocks the
+  letter until the user decides.
+- **Language is the application's.** Never inferred from the job; German and
+  English have fixed subject / salutation / closing wording.
+- **Authorization** follows the V0.7 chain `user → Application → UserJob`; a
+  composite foreign key `(application_id, user_id)` keeps a document from being
+  stored for another user's application; anything not yours is a 404.
+- **Failures are application-level errors** (no raw provider error, prompt or
+  unvalidated output reaches the user) and always end in a terminal state, so
+  nothing is stuck "generating"; with no AI provider, generation fails — it
+  never fabricates.
+- **Migration** `f1a6d3c8b2e4`: purely additive (two enum types, one table, one
+  unique constraint on `applications (id, user_id)`); no V0–V0.7 row changes;
+  downgrades to the exact V0.7 schema.
+- **API**: `GET /applications/{id}/documents`, `GET .../documents/{document_id}`,
+  `POST .../documents/cv`, `POST .../documents/cover-letter` (no body; every POST
+  is a new version).
+- **UI**: the *Documents* section of `/applications/[id]` — status, Generate /
+  View / Regenerate, version history, blockers, rejection reasons, and a viewer
+  that shows where each statement comes from.
+- Not in V0.8: editing generated documents (kept apart from the AI original when
+  it arrives), PDF / DOCX export, AI answers to application questions (V0.9),
+  browser automation and auto-fill (V0.10), review and submission (V0.11),
+  tracking (V0.12).

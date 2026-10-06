@@ -9,8 +9,9 @@ This repository currently implements **V0 — Foundation**,
 **V0.1 — User Profile & Job Preference Intelligence**,
 **V0.2 — Resume Intelligence**, **V0.3 — Job Discovery Foundation**,
 **V0.4 — Job Intelligence & Cross-Source Normalization**, the V0.5 matching
-foundations (data model and taxonomy) and **V0.6 — Job Matching &
-Explainability**.
+foundations (data model and taxonomy), **V0.6 — Job Matching &
+Explainability**, **V0.7 — Application Workspace** and **V0.8 — Tailored CV &
+Anschreiben Generation**.
 
 ## 1. What JobPilot is
 
@@ -18,7 +19,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.7)
+## 2. Current scope (V0 – V0.8)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -185,8 +186,27 @@ resume version it builds on, and private notes — separate from your profile an
 preferences, which it never changes. The job and source posting are captured in
 a write-once snapshot, so later versions can reproduce what you applied to even
 after the posting changes. V0.7 contains **no** CV or cover-letter generation,
-AI, browser automation, auto-fill or submission — those are V0.8 and later. See
+AI, browser automation, auto-fill or submission — those are V0.9 and later. See
 [`docs/application-workspace.md`](docs/application-workspace.md).
+
+V0.8 adds **Tailored CV & Anschreiben Generation**. From an Application's
+**Documents** section you can generate a tailored CV and a cover letter
+(Anschreiben) for *this* job, built from your **confirmed** resume, the job as it
+was when you started, and the application's own data — in the application's
+language (German or English), never guessed from the job. **Truth comes
+first**: the AI never writes plain facts (employers, titles, dates, degrees and
+skill names are copied from your resume), every sentence it writes cites the
+resume facts it rests on, and a deterministic validator rejects invented
+employers, tools, numbers, credentials, titles and pay talk — a rejected or
+failed attempt is never saved as a document. Your salary expectation appears in
+a letter only if you chose Yes, in a fixed sentence. Every generation is a new,
+numbered version with its provenance (resume version, prompt version, provider
+and model); regenerating never overwrites an earlier version, and the CV and
+letter are generated independently. Without an AI provider generation fails
+cleanly rather than inventing anything. See
+[`docs/tailored-documents.md`](docs/tailored-documents.md). Not in V0.8:
+editing or exporting generated documents, application question answering,
+browser automation, auto-fill or submission.
 
 ## 3. Tech stack
 
@@ -219,7 +239,8 @@ jobpilot/
 │   │   ├── api/v1/      Routers: auth, users, profile (+ skills/languages/
 │   │   │                  completeness), preferences (+ job-titles/locations),
 │   │   │                  resumes (+ Resume Intelligence), jobs (V0.3),
-│   │   │                  matching (V0.6), applications (V0.7)
+│   │   │                  matching (V0.6), applications (V0.7),
+│   │   │                  documents (V0.8)
 │   │   ├── core/        Config, security, logging, error handling
 │   │   ├── db/          SQLAlchemy base + session
 │   │   ├── models/      SQLAlchemy models
@@ -227,9 +248,10 @@ jobpilot/
 │   │   └── services/    Business logic, storage abstraction, resume_intelligence/
 │   │                      pipeline, job_discovery/ (sources, normalizer,
 │   │                      normalization/, deduplication/, discovery),
-│   │                      matching/ (V0.6), applications/ (V0.7)
+│   │                      matching/ (V0.6), applications/ (V0.7),
+│   │                      documents/ (V0.8: facts, context, validation)
 │   ├── alembic/         Database migrations
-│   ├── e2e/             Backend launcher for real-browser E2E (mock job boards)
+│   ├── e2e/             Backend launcher for real-browser E2E (mock job boards, stub AI)
 │   └── tests/           Pytest suite
 │
 ├── docs/
@@ -238,7 +260,8 @@ jobpilot/
 │   ├── job-discovery.md
 │   ├── job-intelligence.md
 │   ├── job-matching.md
-│   └── application-workspace.md
+│   ├── application-workspace.md
+│   └── tailored-documents.md
 │
 ├── docker-compose.yml   PostgreSQL (dev infrastructure)
 ├── .env.example
@@ -339,7 +362,9 @@ Backend tests run against a separate `jobpilot_test` database (the
 `DATABASE_URL` tests use is derived automatically; create the database once
 with `createdb jobpilot_test` or let your Postgres role create it).
 Tests never call a real AI API: they force `AI_PROVIDER=disabled` and inject a
-deterministic fake provider backed by fixtures in `backend/tests/fixtures/resume/`.
+deterministic fake provider backed by fixtures in `backend/tests/fixtures/resume/`
+(for V0.8 documents the fake restates the facts it is shown, and tests make it
+unfaithful on purpose to prove invented claims are rejected).
 Tests never call a real job board either: sources run over a mocked HTTP
 transport with fixtures in `backend/tests/fixtures/jobs/`, and real HTTP
 transports raise inside the test suite.
@@ -356,7 +381,8 @@ npm run build    # production build sanity check
 
 Real-browser E2E (Playwright + Chromium against the real backend, a freshly
 migrated `<db>_e2e` database and the production frontend build; job boards
-are served by deterministic local mocks, see `backend/e2e/serve.py`):
+are served by deterministic local mocks and the AI is a deterministic stub, see
+`backend/e2e/serve.py`):
 
 ```bash
 cd frontend
@@ -380,7 +406,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.7)
+## 12. API endpoints (V0 – V0.8)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -446,6 +472,11 @@ POST   /jobs/{id}/application           Start Application (V0.7): 201 new, or 20
 GET    /applications                    your applications (page, page_size)
 GET    /applications/{id}               workspace: preparation data, job context, resume, match, progress
 PATCH  /applications/{id}               update application-specific data (partial; null clears)
+
+GET    /applications/{id}/documents                  every generation attempt + what's needed next (V0.8)
+GET    /applications/{id}/documents/{document_id}    one validated document, its validation and sources
+POST   /applications/{id}/documents/cv               generate a new tailored CV version (no body)
+POST   /applications/{id}/documents/cover-letter     generate a new Anschreiben version (no body)
 ```
 
 `GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
@@ -470,7 +501,7 @@ V0.5   Matching foundations        ✅ (V0.5.0 data model, V0.5.1 taxonomy)
 V0.6   Job Matching & Explainability   ✅
        Job Dashboard / MVP
 V0.7   Application Workspace        ✅
-V0.8   Tailored CV + Anschreiben
+V0.8   Tailored CV + Anschreiben    ✅
 V0.9   Application Question AI
 V0.10  Browser Automation
 V0.11  Review & Submit

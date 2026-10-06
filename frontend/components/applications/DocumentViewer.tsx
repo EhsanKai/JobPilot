@@ -198,14 +198,14 @@ function LetterView({
   return (
     <div className="flex flex-col gap-4 text-sm text-slate-800">
       {sender.length > 0 && (
-        <p className="text-slate-600" aria-label="Sender">
-          {sender.join(" · ")}
-        </p>
+        <div role="group" aria-label="Sender">
+          <p className="text-slate-600">{sender.join(" · ")}</p>
+        </div>
       )}
       {content.recipient.company_name && (
-        <p className="font-medium text-slate-900" aria-label="Recipient">
-          {content.recipient.company_name}
-        </p>
+        <div role="group" aria-label="Recipient">
+          <p className="font-medium text-slate-900">{content.recipient.company_name}</p>
+        </div>
       )}
       <p className="font-semibold text-slate-900">{content.subject}</p>
       <p>{content.salutation}</p>
@@ -216,9 +216,9 @@ function LetterView({
         </div>
       ))}
       {content.salary_statement && (
-        <p data-role="salary" aria-label="Salary statement">
-          {content.salary_statement}
-        </p>
+        <div role="group" aria-label="Salary statement">
+          <p data-role="salary">{content.salary_statement}</p>
+        </div>
       )}
       <div>
         <p>{content.closing_formula}</p>

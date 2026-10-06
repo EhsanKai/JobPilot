@@ -250,9 +250,14 @@ CLAIM_CLASSES: dict[str, dict[str, re.Pattern[str]]] = {
     "UNSUPPORTED_ROLE_CLAIM": {
         "leadership": re.compile(
             _B + r"(lead|leads|led|leader|leaders|leadership|leading (?:a|the|an)|manag\w*|"
-            r"supervis\w*|oversaw|oversee\w*|spearhead\w*|ownership|leiter\w*|leitung|leitete|"
-            r"geleitet|leiten|fuhrungs\w*|teamfuhrung|fuhrte (?:ein|das|die)|verantwortete|"
-            r"verantwortlich fur (?:das|die|den) team)(?![a-z])"
+            r"supervis\w*|oversaw|oversee\w*|spearhead\w*|ownership|"
+            # German: management compounds (Teamleiter, Projektleitung ...), but not
+            # Anleitung / begleiten / Buchführung, and not "führte ... durch" (carried out).
+            r"(?:team|projekt|abteilungs|bereichs|gruppen|schicht|fach|produkt|programm|"
+            r"entwicklungs|vertriebs|werks|geschafts|betriebs|standort|filial|lager|labor|"
+            r"stations|ressort|qualitats|chef)?(?:leiter|leiterin|leitung)|"
+            r"leitete|leitet|geleitet|leiten|fuhrungs\w*|"
+            r"(?:personal|mitarbeiter|team|projekt)fuhrung)(?![a-z])"
         ),
         "seniority": re.compile(_B + r"(senior|junior|principal)(?![a-z])"),
         "executive": re.compile(
@@ -260,10 +265,10 @@ CLAIM_CLASSES: dict[str, dict[str, re.Pattern[str]]] = {
             r"geschaftsfuhr\w*|vorstand|bereichsleit\w*)(?![a-z])"
         ),
         "founder": re.compile(
-            _B + r"(founder|co-founder|founded|grunder\w*|gegrundet|grundete)(?![a-z])"
+            _B + r"(founder|co-founder|founded|(?:mit)?grunder\w*|gegrundet|grundete)(?![a-z])"
         ),
         "mentoring": re.compile(_B + r"(mentor\w*|coach\w*)(?![a-z])"),
-        "architect": re.compile(_B + r"(architect(?!ure)\w*|architekt\w*)(?![a-z])"),
+        "architect": re.compile(_B + r"(architect(?!ure)\w*|[a-z]*architekt\w*)(?![a-z])"),
     },
     "UNSUPPORTED_CREDENTIAL": {
         "certification": re.compile(
@@ -405,9 +410,7 @@ PAST_EMPLOYMENT = re.compile(
 )
 
 
-def mask_job_references(
-    text: str, *, titles: tuple[str, ...], names: tuple[str, ...]
-) -> str:
+def mask_job_references(text: str, *, titles: tuple[str, ...], names: tuple[str, ...]) -> str:
     """Blank out the job's own title -- only where it refers to the position --
     and its company and location, so "I am applying for the position of Senior
     Project Manager at Example GmbH in Köln" is not mistaken for claims by the

@@ -1302,3 +1302,79 @@ def test_schema_of_a_letter_output_matches_the_provider_contract() -> None:
         )
     )
     assert parsed.paragraphs[0].role == "opening"
+
+
+# --- The real Anthropic provider class, against a mocked client -------------------------------
+
+
+class _AnthropicMessages:
+    """What the Anthropic SDK client would return: text for a structured-output request."""
+
+    def __init__(self, reply: Any) -> None:
+        self.reply = reply  # str | callable(prompt) -> str
+        self.kwargs: dict[str, Any] = {}
+
+    async def create(self, **kwargs: Any) -> Any:
+        from types import SimpleNamespace
+
+        self.kwargs = kwargs
+        prompt = kwargs["messages"][0]["content"]
+        text = self.reply(prompt) if callable(self.reply) else self.reply
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=text)], stop_reason="end_turn"
+        )
+
+
+def _use_anthropic(reply: Any) -> _AnthropicMessages:
+    from types import SimpleNamespace
+
+    from app.ai.factory import get_ai_provider
+    from app.ai.providers.anthropic import AnthropicProvider
+    from app.main import app
+
+    messages = _AnthropicMessages(reply)
+    provider = AnthropicProvider(
+        api_key=None, model="claude-test", client=SimpleNamespace(messages=messages)
+    )
+    app.dependency_overrides[get_ai_provider] = lambda: provider
+    return messages
+
+
+def test_a_real_provider_class_works_with_the_document_schemas(
+    client: TestClient, auth: dict[str, str], ready: dict[str, Any]
+) -> None:
+    from tests.document_helpers import context_of, faithful_cv
+
+    messages = _use_anthropic(lambda prompt: json.dumps(faithful_cv(context_of(prompt))))
+    document = ok(generate(client, auth, ready["id"], CV))
+
+    assert document["ai_provider"] == "anthropic" and document["ai_model"] == "claude-test"
+    assert document["status"] == "validated"
+    # structured output was requested with the document schema, and the prompt is versioned
+    output_format = messages.kwargs["output_config"]["format"]
+    assert output_format["type"] == "json_schema"
+    assert "source_experience_id" in json.dumps(output_format["schema"])
+    assert messages.kwargs["system"].startswith("You tailor a candidate's CV")
+
+
+@pytest.mark.parametrize("reply", ["not json at all", '{"summary": {"text": "x"', "", "[]"])
+def test_malformed_json_from_a_real_provider_is_a_failure_and_stores_nothing(
+    client: TestClient, auth: dict[str, str], ready: dict[str, Any], reply: str
+) -> None:
+    _use_anthropic(reply)
+    body = error(
+        generate(client, auth, ready["id"], LETTER),
+        502,
+        "AI_EMPTY_RESPONSE" if reply == "" else "AI_INVALID_RESPONSE",
+    )
+    assert "nothing was saved" in body["message"] or "empty result" in body["message"]
+    (item,) = listing(client, auth, ready["id"])["items"]
+    assert item["status"] == "failed" and item["version_number"] is None
+
+
+def test_json_that_breaks_the_schema_from_a_real_provider_is_a_failure(
+    client: TestClient, auth: dict[str, str], ready: dict[str, Any]
+) -> None:
+    # valid JSON, wrong shape: an invented field the contract doesn't have
+    _use_anthropic(json.dumps({"summary": {"text": "x", "source_fact_ids": []}, "invented": 1}))
+    error(generate(client, auth, ready["id"], CV), 502, "AI_INVALID_RESPONSE")

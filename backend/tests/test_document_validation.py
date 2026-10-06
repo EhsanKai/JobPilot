@@ -471,3 +471,57 @@ def test_referring_to_the_position_company_and_place_is_not_a_claim() -> None:
     ):
         report = validation.validate_letter(with_paragraph(context, 0, text=text), context)
         assert report.status == "passed", (text, report.violations)
+
+
+# --- German claim lexicon ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Teamleiter im Bereich SAP",
+        "Unterstützte die Projektleitung",
+        "Abteilungsleiterin für die Entwicklung",
+        "Mitarbeiterführung und Budgetverantwortung",
+        "Softwarearchitekt für Schnittstellen",
+        "Mitgründer des Teams",
+        "Leitete ein Team von Entwicklern",
+    ],
+)
+def test_german_management_compounds_are_claims(text: str) -> None:
+    """Teamleiter, Projektleitung ... are how German says "I led": they count."""
+    from app.services.documents import claims
+
+    assert "UNSUPPORTED_ROLE_CLAIM" in claims.claim_groups(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Führte die Migration der Schnittstellen auf S/4HANA durch.",
+        "Verantwortete die Umsetzung der Reports.",
+        "Erstellte Anleitungen und einen Leitfaden.",
+        "Buchführung und Begleiten von Kunden.",
+        "Software architecture review.",
+    ],
+)
+def test_ordinary_german_and_english_work_verbs_are_not_leadership_claims(text: str) -> None:
+    from app.services.documents import claims
+
+    assert "UNSUPPORTED_ROLE_CLAIM" not in claims.claim_groups(text)
+
+
+def test_a_german_leadership_word_is_supported_by_a_German_fact() -> None:
+    from tests.document_helpers import accepted_profile_data
+
+    resume = accepted_profile_data()
+    resume.work_experience[0].responsibilities[0] = "Teamleitung für vier Entwickler"
+    context = build_context("cv", language="de", data=resume)
+    ok = validation.validate_cv(
+        with_bullet(context, "Leitung eines Teams von vier Entwicklern.", ["exp1.r1"]), context
+    )
+    assert "UNSUPPORTED_ROLE_CLAIM" not in codes(ok)
+    bad = validation.validate_cv(
+        with_bullet(context, "Leitung eines Teams von vier Entwicklern.", ["exp1.r2"]), context
+    )
+    assert "UNSUPPORTED_ROLE_CLAIM" in codes(bad)

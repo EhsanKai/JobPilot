@@ -19,7 +19,10 @@ preparation workspace.
 
 V0.7 is deliberately *only* the foundation. It contains no CV or cover-letter
 generation, no AI, no browser automation, no auto-fill or submission, and no
-new matching logic (see [§17](#17-scope-and-whats-deferred)).
+new matching logic (see [§17](#17-scope-and-whats-deferred)). V0.8 builds on it:
+the tailored CV and Anschreiben are generated from an application's context
+snapshot, resume reference and preparation data (see
+[`tailored-documents.md`](tailored-documents.md)).
 
 ## Contents
 

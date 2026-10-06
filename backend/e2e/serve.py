@@ -10,6 +10,13 @@ Lever payloads (`tests.job_helpers`). E2E runs must be repeatable, and the
 real boards are not reachable from every environment (and their content
 changes daily). This does NOT claim anything about the live APIs.
 
+The AI is a deterministic stub as well (`E2EStubAI`, in this file only -- nothing
+in `app/` can reach it): it analyzes the fixture resume with the canned parser
+output, and writes tailored documents by restating the very facts it is shown,
+so the browser flow exercises the real pipeline -- context, structured output,
+truth validation, versioning, storage -- without a real provider. It says
+nothing about the quality of any real model.
+
 Mock content: one SAP vacancy published on both boards (Cologne / "Köln",
 same text) plus a Lever posting with the same title in Munich, which must
 stay a separate job.
@@ -57,8 +64,13 @@ def main() -> None:
 
     # Imported after the URL is set: the app's engine is created on import.
     os.environ["DATABASE_URL"] = url
+    from app.ai.factory import get_ai_provider
+    from app.ai.provider import AINotConfiguredError, T
     from app.main import app
+    from app.schemas.document_ai import AICoverLetter, AITailoredCV
+    from app.schemas.resume_profile import ParsedResume
     from app.services.job_discovery.registry import get_job_source_registry
+    from tests.document_helpers import FakeDocumentAI
     from tests.job_helpers import (
         FakeJobBoards,
         cross_source_registry,
@@ -76,6 +88,24 @@ def main() -> None:
         ],
     )
     app.dependency_overrides[get_job_source_registry] = lambda: registry
+
+    class E2EStubAI(FakeDocumentAI):
+        """Visible in every document's provenance as "e2e-stub".
+
+        It serves only what the V0.8 flow needs. For anything else (the V0.6
+        match explanation) it behaves as before it existed: no provider is
+        configured, so that spec still sees the "not available" path."""
+
+        name = "e2e-stub"
+        model = "e2e-stub-1"
+
+        async def generate_structured(self, *, system: str, prompt: str, schema: type[T]) -> T:
+            if schema not in (ParsedResume, AITailoredCV, AICoverLetter):
+                raise AINotConfiguredError("the E2E stub serves resumes and documents only")
+            return await super().generate_structured(system=system, prompt=prompt, schema=schema)
+
+    stub = E2EStubAI()
+    app.dependency_overrides[get_ai_provider] = lambda: stub
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("E2E_API_PORT", "8000")))
 
 
