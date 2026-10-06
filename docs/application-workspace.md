@@ -25,7 +25,11 @@ snapshot, resume reference and preparation data (see
 [`tailored-documents.md`](tailored-documents.md)). V0.9 adds the employer's
 **application questions** to the workspace, with suggested answers the user
 controls, plus Humanize / edit / photo for the documents (see
-[`application-questions.md`](application-questions.md)).
+[`application-questions.md`](application-questions.md)). V0.10 adds the **browser
+assistant**: the user explicitly opens the application's own page in a controlled
+browser, JobPilot discovers its fields, maps them to the questions above and fills only
+the answers the user approved — pausable, with the browser always the user's to take over,
+and never submitting (see [`browser-automation.md`](browser-automation.md)).
 
 **Workspace sections** (the in-page navigation of `/applications/[id]`):
 
@@ -35,6 +39,7 @@ Application
 ├── Preparation                    salary, availability, notice period, language, resume
 ├── CV · Anschreiben               generated, editable, copyable, versioned        (V0.8 / V0.9)
 ├── Questions                      the employer's questions and your answers       (V0.9)
+├── Browser assistant              open the application page, review fields, fill  (V0.10)
 └── Notes                          private
 ```
 
@@ -454,7 +459,7 @@ V0.7 **does not** include, and nothing in it accidentally implements:
 | --- | --- |
 | V0.8 | tailored CV generation; Anschreiben (German / English) |
 | V0.9 | AI answers to application questions |
-| V0.10 | browser automation, auto-fill |
+| V0.10 | browser automation, auto-fill (built: [`browser-automation.md`](browser-automation.md)) |
 | V0.11 | review and submission |
 | V0.12 | the full application lifecycle and tracking (interviews, offers, follow-ups, no-response); an applications list UI |
 

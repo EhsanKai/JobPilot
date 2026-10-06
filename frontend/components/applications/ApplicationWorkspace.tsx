@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { ApplicationDocuments } from "@/components/applications/ApplicationDocuments";
 import { ApplicationQuestions } from "@/components/applications/ApplicationQuestions";
+import { BrowserAssistant } from "@/components/applications/BrowserAssistant";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -488,6 +489,8 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
           />
 
           <ApplicationQuestions applicationId={application.id} />
+
+          <BrowserAssistant applicationId={application.id} />
         </div>
 
         <aside className="flex flex-col gap-6">
@@ -501,7 +504,7 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
 
 /**
  * The parts of an application workspace, in the order a user works through them:
- *   Job -> Match -> Preparation -> CV -> Anschreiben -> Questions -> Notes
+ *   Job -> Match -> Preparation -> CV -> Anschreiben -> Questions -> Browser assistant -> Notes
  */
 const WORKSPACE_SECTIONS: [string, string][] = [
   ["Job", "job-heading"],
@@ -510,6 +513,7 @@ const WORKSPACE_SECTIONS: [string, string][] = [
   ["CV", "documents-tailored_cv-heading"],
   ["Anschreiben", "documents-cover_letter-heading"],
   ["Questions", "questions-heading"],
+  ["Browser assistant", "browser-assistant-heading"],
   ["Notes", "notes-heading"],
 ];
 

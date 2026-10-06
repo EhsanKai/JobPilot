@@ -13,3 +13,4 @@ pypdf==6.19.0
 python-docx==1.2.0
 anthropic==1.11.0
 httpx==0.28.1
+playwright==1.56.0

@@ -33,6 +33,7 @@ from app.services.job_discovery.registry import (  # noqa: E402
 from app.services.storage.base import FileStorage  # noqa: E402
 from app.services.storage.factory import get_file_storage  # noqa: E402
 from app.services.storage.local import LocalFileStorage  # noqa: E402
+from tests.fake_site import FakeApplicationSite  # noqa: E402
 from tests.job_helpers import FakeJobBoards, make_registry  # noqa: E402
 from tests.resume_helpers import FakeAIProvider  # noqa: E402
 
@@ -154,3 +155,35 @@ def register_and_login(client: TestClient):  # type: ignore[no-untyped-def]
         return response.json()
 
     return _register
+
+
+# --- Browser assistant (V0.10) -------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def fake_site() -> Generator["FakeApplicationSite", None, None]:
+    """A local employer website served to a real headless Chromium."""
+    site = FakeApplicationSite().start()
+    yield site
+    site.stop()
+
+
+@pytest.fixture
+def automation_env(
+    monkeypatch: pytest.MonkeyPatch, fake_site: "FakeApplicationSite"
+) -> Generator["FakeApplicationSite", None, None]:
+    """Headless Chromium, the fake site (on localhost) allowed, no browser left behind."""
+    from app.core.config import settings
+    from app.services.automation.registry import registry
+
+    monkeypatch.setattr(settings, "AUTOMATION_BROWSER_HEADLESS", True)
+    monkeypatch.setattr(settings, "AUTOMATION_ALLOW_PRIVATE_HOSTS", True)
+    chromium = os.environ.get("TEST_CHROMIUM_PATH")
+    monkeypatch.setattr(settings, "AUTOMATION_CHROMIUM_PATH", chromium)
+    registry.set_driver_factory(None)
+    fake_site.submissions.clear()
+    fake_site.page_loads.clear()
+    yield fake_site
+    registry.shutdown()
+    registry.set_driver_factory(None)
+    fake_site.submissions.clear()

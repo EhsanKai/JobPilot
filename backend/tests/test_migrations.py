@@ -9,6 +9,7 @@
     V0 data    -> upgrade head                       (V0 application gets its UserJob + context)
     V0.7 data  -> upgrade -> downgrade -> upgrade    (V0.8 roundtrip, tailored documents)
     V0.8 data  -> upgrade -> downgrade -> upgrade    (V0.9 roundtrip, questions and document origin)
+    V0.9 data  -> upgrade -> downgrade -> upgrade    (V0.10 roundtrip, browser automation)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -1592,6 +1593,209 @@ def test_v09_downgrade_restores_the_v08_schema_and_data_exactly(migration_db: En
     assert_v09_schema(migration_db)
     fingerprints = data_fingerprints(migration_db, v08_tables)
     assert fingerprints["applications"] == data_before["applications"]
+    with migration_db.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == []
+
+
+# --- V0.10: browser automation (additive: sessions, fields, events) ------------------------
+
+V010 = "b4e8c2d6a1f9"
+V010_TABLES = {"automation_sessions", "automation_fields", "automation_events"}
+V010_ENUMS = {
+    "automation_status": [
+        "STARTING", "RUNNING", "PAUSED", "USER_CONTROL", "BLOCKED", "COMPLETED", "STOPPED",
+        "FAILED",
+    ],
+    "automation_mapping_status": ["UNMAPPED", "AUTO_MAPPED", "USER_CONFIRMED", "NEEDS_REVIEW"],
+    "automation_fill_status": [
+        "NOT_FILLED", "FILLED", "FILL_FAILED", "USER_MODIFIED", "USER_ACTION_REQUIRED",
+    ],
+}
+SESSION_ID = uuid.UUID("00000000-0000-4000-8000-0000000000f1")
+BROWSER_QUESTION_ID = uuid.UUID("00000000-0000-4000-8000-0000000000e3")
+
+
+def build_v09_database(engine: Engine, config: Config) -> None:
+    """A V0.9 database with realistic questions: one the user wrote and answered, one a
+    discovered form field would have created (source and external key set), and the
+    V0.8 documents of `build_v08_database`."""
+    build_v08_database(engine, config)
+    command.upgrade(config, V09)
+    insert_question(engine)
+    execute(
+        engine,
+        "INSERT INTO application_question_answers (id, question_id, user_id, status, "
+        "answer_source, final_answer, ai_source_fact_ids, suggestion_dismissed) "
+        "VALUES (gen_random_uuid(), :q, :u, 'USER_EDITED', 'USER', 'Because.', '[]'::jsonb, false)",
+        q=QUESTION_ID, u=USER_ID,
+    )
+    insert_question(engine, id=BROWSER_QUESTION_ID)
+    execute(
+        engine,
+        "UPDATE application_questions SET source = 'browser', "
+        "external_key = 'browser:field:id:email', field_name = 'email', "
+        "source_metadata = '{\"input_type\": \"email\"}'::jsonb WHERE id = :id",
+        id=BROWSER_QUESTION_ID,
+    )
+    execute(
+        engine,
+        "INSERT INTO application_question_answers (id, question_id, user_id, status, "
+        "ai_source_fact_ids, suggestion_dismissed) "
+        "VALUES (gen_random_uuid(), :q, :u, 'NOT_STARTED', '[]'::jsonb, false)",
+        q=BROWSER_QUESTION_ID, u=USER_ID,
+    )
+
+
+def insert_session(engine: Engine, *, status: str = "RUNNING", **overrides: Any) -> None:
+    values: dict[str, Any] = {
+        "id": SESSION_ID,
+        "application": APPLICATION_ID,
+        "user": USER_ID,
+        "status": status,
+        "ended": "now()" if status in ("STOPPED", "FAILED") else "NULL",
+    }
+    values.update(overrides)
+    ended = values.pop("ended")
+    execute(
+        engine,
+        "INSERT INTO automation_sessions (id, application_id, user_id, status, target_url, "
+        "allowed_hosts, acknowledged_markers, browser_mode, submit_detected, ended_at) "
+        "VALUES (:id, :application, :user, CAST(:status AS automation_status), "
+        "'https://example.com/apply', '[]'::jsonb, '[]'::jsonb, 'visible', false, "
+        f"{ended})",
+        **values,
+    )
+
+
+def assert_v010_schema(engine: Engine) -> None:
+    assert V010_TABLES <= user_tables(engine)
+    enums = enum_values(engine)
+    for name, values in V010_ENUMS.items():
+        assert enums[name] == values, name
+    indexes = {
+        r["indexname"]: r["indexdef"]
+        for r in rows(
+            engine,
+            "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'automation_sessions'",
+        )
+    }
+    live = indexes["uq_automation_sessions_one_live"]
+    assert "UNIQUE" in live and "WHERE" in live
+    for status in ("STARTING", "RUNNING", "PAUSED", "USER_CONTROL", "BLOCKED", "COMPLETED"):
+        assert status in live
+    assert "STOPPED" not in live and "FAILED" not in live  # ended sessions do not block a new one
+    constraints = {
+        r["conname"]
+        for r in rows(
+            engine,
+            "SELECT conname FROM pg_constraint WHERE conrelid IN "
+            "('automation_sessions'::regclass, 'automation_fields'::regclass, "
+            "'automation_events'::regclass)",
+        )
+    }
+    assert {
+        "fk_automation_sessions_application",
+        "fk_automation_fields_session",
+        "fk_automation_events_session",
+        "uq_automation_fields_session_key",
+        "ck_automation_sessions_ended_iff_terminal",
+        "ck_automation_fields_mapping_confidence",
+    } <= constraints
+
+
+def test_v09_data_survives_v010_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v09_database(migration_db, config)
+
+    v09_tables = user_tables(migration_db)
+    assert not (V010_TABLES & v09_tables)
+    data_before = data_fingerprints(migration_db, v09_tables)
+    schema_before = schema_fingerprint(migration_db, v09_tables)
+    enums_before = enum_values(migration_db)
+    assert data_before["application_questions"][0] == 2
+
+    # V0.9 -> V0.10: purely additive. Nothing that exists changes.
+    command.upgrade(config, V010)
+    assert user_tables(migration_db) == v09_tables | V010_TABLES
+    assert_v010_schema(migration_db)
+    assert data_fingerprints(migration_db, v09_tables) == data_before
+    assert schema_fingerprint(migration_db, v09_tables) == schema_before
+    other_enums = {k: v for k, v in enum_values(migration_db).items() if k not in V010_ENUMS}
+    assert other_enums == enums_before
+    for table in V010_TABLES:
+        assert rows(migration_db, f'SELECT count(*) AS n FROM "{table}"') == [{"n": 0}]
+
+    # The new tables work against migrated V0.9 applications and questions ...
+    insert_session(migration_db)
+    execute(
+        migration_db,
+        "INSERT INTO automation_fields (id, session_id, user_id, field_key, position, "
+        "input_type, label, required, options, meta, locator, present, first_seen_at, "
+        "last_seen_at, mapping_status, question_id, document_confirmed, fill_status) "
+        "VALUES (gen_random_uuid(), :s, :u, 'field:id:email', 0, 'email', 'Email', true, NULL, "
+        "'{}'::jsonb, '{}'::jsonb, true, now(), now(), 'AUTO_MAPPED', :q, false, 'NOT_FILLED')",
+        s=SESSION_ID, u=USER_ID, q=BROWSER_QUESTION_ID,
+    )
+    execute(
+        migration_db,
+        "INSERT INTO automation_events (id, session_id, user_id, event_type, data) "
+        "VALUES (gen_random_uuid(), :s, :u, 'SESSION_STARTED', '{}'::jsonb)",
+        s=SESSION_ID, u=USER_ID,
+    )
+    # ... and enforce what they promise: one live session per application,
+    with pytest.raises(Exception, match="uq_automation_sessions_one_live"):
+        insert_session(migration_db, id=uuid.uuid4())
+    insert_session(migration_db, id=uuid.uuid4(), status="STOPPED")  # an ended one is fine
+    # only terminal statuses have an end,
+    with pytest.raises(Exception, match="ck_automation_sessions_ended_iff_terminal"):
+        insert_session(migration_db, id=uuid.uuid4(), status="STOPPED", ended="NULL")
+    # a session cannot be stored for someone else's application,
+    with pytest.raises(Exception, match="fk_automation_sessions_application"):
+        insert_session(migration_db, id=uuid.uuid4(), status="STOPPED", user=uuid.uuid4())
+    # one field per key in a session,
+    with pytest.raises(Exception, match="uq_automation_fields_session_key"):
+        execute(
+            migration_db,
+            "INSERT INTO automation_fields (id, session_id, user_id, field_key, position, "
+            "input_type, label, required, meta, locator, present, first_seen_at, last_seen_at, "
+            "mapping_status, document_confirmed, fill_status) "
+            "VALUES (gen_random_uuid(), :s, :u, 'field:id:email', 1, 'email', 'Again', false, "
+            "'{}'::jsonb, '{}'::jsonb, true, now(), now(), 'UNMAPPED', false, 'NOT_FILLED')",
+            s=SESSION_ID, u=USER_ID,
+        )
+    # and deleting a question only unmaps the field; deleting the application removes all.
+    execute(
+        migration_db, "DELETE FROM application_questions WHERE id = :id", id=BROWSER_QUESTION_ID
+    )
+    unmapped = rows(migration_db, "SELECT question_id FROM automation_fields")
+    assert unmapped == [{"question_id": None}]
+    execute(migration_db, "DELETE FROM applications WHERE id = :id", id=APPLICATION_ID)
+    for table in V010_TABLES:
+        assert rows(migration_db, f'SELECT count(*) AS n FROM "{table}"') == [{"n": 0}]
+
+
+def test_v010_downgrade_restores_the_v09_schema_and_data_exactly(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v09_database(migration_db, config)
+    v09_tables = user_tables(migration_db)
+    data_before = data_fingerprints(migration_db, v09_tables)
+    schema_before = schema_fingerprint(migration_db, v09_tables)
+    enums_before = enum_values(migration_db)
+
+    command.upgrade(config, V010)
+    insert_session(migration_db)  # V0.10-only data: lost on downgrade, by design
+    command.downgrade(config, V09)
+
+    assert user_tables(migration_db) == v09_tables
+    assert schema_fingerprint(migration_db, v09_tables) == schema_before
+    assert enum_values(migration_db) == enums_before
+    assert data_fingerprints(migration_db, v09_tables) == data_before
+
+    # and upgrading again works, with the schema exactly what the models declare
+    command.upgrade(config, "head")
+    assert_v010_schema(migration_db)
+    assert data_fingerprints(migration_db, v09_tables) == data_before
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == []

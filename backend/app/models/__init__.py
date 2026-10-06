@@ -16,6 +16,15 @@ from app.models.application_question import (
     GenerationOutcome,
     QuestionType,
 )
+from app.models.automation import (
+    ACTIVE_STATUSES,
+    AutomationEvent,
+    AutomationField,
+    AutomationSession,
+    AutomationStatus,
+    FillStatus,
+    MappingStatus,
+)
 from app.models.candidate_profile_version import (
     CandidateProfileVersion,
     CandidateProfileVersionReason,
@@ -106,6 +115,13 @@ __all__ = [
     "GeneratedDocument",
     "GeneratedDocumentOrigin",
     "ApplicationPhoto",
+    "AutomationSession",
+    "AutomationField",
+    "AutomationEvent",
+    "AutomationStatus",
+    "ACTIVE_STATUSES",
+    "MappingStatus",
+    "FillStatus",
     "ApplicationQuestion",
     "ApplicationQuestionAnswer",
     "ApplicationQuestionGeneration",

@@ -11,8 +11,9 @@ This repository currently implements **V0 — Foundation**,
 **V0.4 — Job Intelligence & Cross-Source Normalization**, the V0.5 matching
 foundations (data model and taxonomy), **V0.6 — Job Matching &
 Explainability**, **V0.7 — Application Workspace**, **V0.8 — Tailored CV &
-Anschreiben Generation** and **V0.9 — Application Question AI + Human Control at
-Every Stage**.
+Anschreiben Generation**, **V0.9 — Application Question AI + Human Control at
+Every Stage** and **V0.10 — Browser Automation & Human-Controlled Application
+Filling**.
 
 ## 1. What JobPilot is
 
@@ -20,7 +21,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.9)
+## 2. Current scope (V0 – V0.10)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -240,6 +241,36 @@ See [`docs/application-questions.md`](docs/application-questions.md). Not in V0.
 browser automation, auto-fill or submission (V0.10 and later), PDF / DOCX export, a
 rich editor, image editing.
 
+V0.10 adds the **browser assistant**: *JobPilot fills forms; you remain in control.*
+
+- **Opened by you, on the application's own page.** From the Application Workspace,
+  **Start browser assistant** opens the application's URL (from the application's
+  snapshot, never one you type) in a controlled Chromium and reads the form. Nothing
+  opens, fills or attaches until you ask.
+- **Discover → map → review → approve → fill → verify.** Each field (text, email, phone,
+  number, date, textarea, select, radio, checkbox groups, file) is mapped to one of the
+  application's questions (the same V0.9 questions; new ones are created for fields
+  nothing fits, never duplicated on rediscovery). Uncertain mappings wait for you.
+  Only **approved** answers are typed in — yours, your saved application data, or an AI
+  answer you accepted. An unreviewed AI suggestion is **never** filled; a missing answer
+  is "Needs your input", also on required fields. Every value is read back and checked.
+- **You are always in control.** Pause, take control, edit anything, resume, stop. While
+  you are in control nothing is written; what you changed is never overwritten (resuming
+  looks first); consent and legal checkboxes are never ticked for you.
+- **It hands back, never works around.** A CAPTCHA or security check, a login, a refused
+  page or an unexpected website stops the assistant and returns the browser to you.
+- **Documents.** A file field proposes your current tailored CV or Anschreiben; it is
+  attached only after **Use this file**, and exactly that version.
+- **It never submits.** V0.10 has no way to press a button: final actions
+  (*Submit, Apply, Bewerbung absenden …*) are recognized, never pressed, and you are told
+  to submit manually.
+
+See [`docs/browser-automation.md`](docs/browser-automation.md). Needs Chromium
+(`playwright install chromium`); set `AUTOMATION_BROWSER_HEADLESS=true` on a machine
+without a display. Not in V0.10: submission, review before submission (V0.11),
+CAPTCHA or login handling beyond handing the browser back, link following, custom
+(ARIA) controls.
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -272,7 +303,8 @@ jobpilot/
 │   │   │                  completeness), preferences (+ job-titles/locations),
 │   │   │                  resumes (+ Resume Intelligence), jobs (V0.3),
 │   │   │                  matching (V0.6), applications (V0.7),
-│   │   │                  documents (V0.8)
+│   │   │                  documents (V0.8), questions (V0.9),
+│   │                  automation (V0.10)
 │   │   ├── core/        Config, security, logging, error handling
 │   │   ├── db/          SQLAlchemy base + session
 │   │   ├── models/      SQLAlchemy models
@@ -281,7 +313,9 @@ jobpilot/
 │   │                      pipeline, job_discovery/ (sources, normalizer,
 │   │                      normalization/, deduplication/, discovery),
 │   │                      matching/ (V0.6), applications/ (V0.7),
-│   │                      documents/ (V0.8: facts, context, validation)
+│   │                      documents/ (V0.8: facts, context, validation),
+│   │                      questions/ (V0.9), automation/ (V0.10: browser/,
+│   │                      discovery, mapping, resolver, filler, controller)
 │   ├── alembic/         Database migrations
 │   ├── e2e/             Backend launcher for real-browser E2E (mock job boards, stub AI)
 │   └── tests/           Pytest suite
@@ -293,7 +327,9 @@ jobpilot/
 │   ├── job-intelligence.md
 │   ├── job-matching.md
 │   ├── application-workspace.md
-│   └── tailored-documents.md
+│   ├── tailored-documents.md
+│   ├── application-questions.md
+│   └── browser-automation.md
 │
 ├── docker-compose.yml   PostgreSQL (dev infrastructure)
 ├── .env.example
@@ -398,6 +434,10 @@ deterministic fake provider backed by fixtures in `backend/tests/fixtures/resume
 (for V0.8 documents, V0.9 answers and Humanize the fake restates the facts it is
 shown, and tests make it unfaithful on purpose to prove invented claims are
 rejected).
+V0.10 browser tests drive a **real headless Chromium** against a local fake employer
+website (`backend/tests/fake_site.py`; it needs `playwright install chromium`, or
+`TEST_CHROMIUM_PATH`). They never touch the internet, and the page's *Submit application*
+button reports every click so the tests can prove it was never pressed.
 Tests never call a real job board either: sources run over a mocked HTTP
 transport with fixtures in `backend/tests/fixtures/jobs/`, and real HTTP
 transports raise inside the test suite.
@@ -423,6 +463,10 @@ npm run build
 E2E_PYTHON=../backend/.venv/bin/python npm run e2e
 ```
 
+(For V0.10 the E2E backend also serves a local fake employer website and a headless
+Chromium for the browser assistant, plus a test-only `/e2e/human/...` stand-in for the
+person at the browser window; see the docstring of `backend/e2e/serve.py`.)
+
 Live source validation (V0.4.1) contacts the real Greenhouse and Lever APIs
 through the production pipeline and needs network access to
 `boards-api.greenhouse.io` and `api.lever.co` (in a Claude Code cloud environment, allow these hosts in the
@@ -439,7 +483,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.9)
+## 12. API endpoints (V0 – V0.10)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -525,6 +569,23 @@ POST   /applications/{id}/questions/{qid}/accept            accept the suggestio
 POST   /applications/{id}/questions/{qid}/reject            reject the suggestion
 POST   /applications/{id}/questions/{qid}/manual            your own answer (no AI needed)
 POST   /applications/{id}/questions/{qid}/clear             remove your answer
+
+POST   /applications/{id}/automation/start                  open the application page in the browser assistant (V0.10)
+GET    /applications/{id}/automation                        sessions, and whether one can be started
+GET    /applications/{id}/automation/{sid}                  the session (status, page, counts, what you can do now)
+GET    /applications/{id}/automation/{sid}/fields           discovered fields, their questions, what is approved
+GET    /applications/{id}/automation/{sid}/events           what the assistant did (codes only)
+GET    /applications/{id}/automation/{sid}/screenshot       a picture of the browser, never stored
+POST   /applications/{id}/automation/{sid}/pause            stop changing anything
+POST   /applications/{id}/automation/{sid}/take-control     the browser is yours
+POST   /applications/{id}/automation/{sid}/resume           give it back (looks first; keeps your edits)
+POST   /applications/{id}/automation/{sid}/stop             end the assistant
+POST   /applications/{id}/automation/{sid}/discover         read the page again (reads only)
+POST   /applications/{id}/automation/{sid}/fill             fill the approved answers into empty fields
+POST   /applications/{id}/automation/{sid}/suggest          AI suggestions for unanswered questions (never accepted for you)
+POST   /applications/{id}/automation/{sid}/confirm-domain   this website is part of my application
+POST   /applications/{id}/automation/{sid}/fields/{fid}/mapping    confirm / change / leave unmapped / add a question
+PUT    /applications/{id}/automation/{sid}/fields/{fid}/document   "Use this file" (DELETE: don't attach)
 ```
 
 `GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
@@ -551,7 +612,7 @@ V0.6   Job Matching & Explainability   ✅
 V0.7   Application Workspace        ✅
 V0.8   Tailored CV + Anschreiben    ✅
 V0.9   Application Question AI + Human Control   ✅
-V0.10  Browser Automation
+V0.10  Browser Automation & Human-Controlled Filling   ✅
 V0.11  Review & Submit
 V0.12  Application Tracking
 V0.13  Multi-source Expansion
