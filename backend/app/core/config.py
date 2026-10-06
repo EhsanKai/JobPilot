@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     JOB_SOURCE_MAX_JOBS_PER_BOARD: int = 1000
     # Maximum response size accepted from a source, in bytes.
     JOB_SOURCE_MAX_RESPONSE_BYTES: int = 25_000_000
+    # Bounded retries for transient failures (connection errors, timeouts,
+    # HTTP 429/500/502/503/504): extra attempts per request, and the base of
+    # the exponential backoff in seconds (V0.4.1).
+    JOB_SOURCE_MAX_RETRIES: int = 2
+    JOB_SOURCE_RETRY_BACKOFF_SECONDS: float = 0.5
     # A discovery run older than this is considered abandoned (e.g. the server
     # restarted mid-run) and no longer blocks a new run.
     JOB_DISCOVERY_STALE_MINUTES: int = 10

@@ -69,6 +69,8 @@ def build_default_registry(config: Settings = settings) -> JobSourceRegistry:
             allowed_hosts=frozenset(hosts),
             timeout_seconds=config.JOB_SOURCE_TIMEOUT_SECONDS,
             max_response_bytes=config.JOB_SOURCE_MAX_RESPONSE_BYTES,
+            max_retries=config.JOB_SOURCE_MAX_RETRIES,
+            retry_backoff_seconds=config.JOB_SOURCE_RETRY_BACKOFF_SECONDS,
         )
 
     registry.register(

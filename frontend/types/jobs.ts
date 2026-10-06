@@ -155,6 +155,8 @@ export interface DiscoveryCounts {
   possible_matches: number;
   skipped: number;
   error_count: number;
+  /** HTTP requests retried after a transient failure (bounded). */
+  retried_requests: number;
   /** Distinct canonical jobs stored for the user. */
   discovered: number;
 }

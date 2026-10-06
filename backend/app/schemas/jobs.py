@@ -223,8 +223,12 @@ class DiscoveryCounts(BaseModel):
     #: Postings fetched but not stored: invalid + duplicates + filtered_out +
     #: beyond_limit.
     skipped: int = 0
-    #: Problems reported by the source (failed boards, unreachable source).
+    #: Problems reported by the source (failed boards, unreachable source)
+    #: and postings that could not be stored.
     error_count: int = 0
+    #: HTTP requests retried after a transient failure (timeouts, 429, 5xx).
+    #: Retries are bounded; a request that still fails is reported as an error.
+    retried_requests: int = 0
     #: Distinct canonical jobs stored for the user.
     discovered: int = 0
 

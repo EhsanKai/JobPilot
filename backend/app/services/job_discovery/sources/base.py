@@ -121,6 +121,8 @@ class SourceSearchResult:
     #: missing from `jobs` is no longer listed (V0.4 freshness). Sources
     #: that can't guarantee completeness leave it empty.
     complete_targets: list[str] = field(default_factory=list)
+    #: HTTP requests that were retried after a transient failure (V0.4.1).
+    retried_requests: int = 0
 
 
 class JobSource(ABC):

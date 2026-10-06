@@ -112,6 +112,7 @@ const ZERO_COUNTS = {
   possible_matches: 0,
   skipped: 0,
   error_count: 0,
+  retried_requests: 0,
   discovered: 0,
 };
 
