@@ -71,6 +71,10 @@ export function DiscoveryStatus({ run, error }: DiscoveryStatusProps) {
           {summary.discovered === 0
             ? "Discovery finished: no matching jobs found this time."
             : `Discovery finished: ${summary.discovered} matching job${summary.discovered === 1 ? "" : "s"} (${summary.created} new, ${summary.updated} updated).`}
+          {summary.merged > 0 &&
+            ` ${summary.merged} ${summary.merged === 1 ? "posting was" : "postings were"} recognized as the same job on another source.`}
+          {summary.possible_matches > 0 &&
+            ` ${summary.possible_matches} similar ${summary.possible_matches === 1 ? "posting was" : "postings were"} kept separate to be safe.`}
           {summary.beyond_limit > 0 &&
             ` ${summary.beyond_limit} more matched beyond this run's limit.`}
         </Alert>

@@ -4,6 +4,7 @@ import type {
   JobDetail,
   JobList,
   JobSource,
+  JobSourcePosting,
   JobSummary,
   SourceRunSummary,
 } from "@/types/jobs";
@@ -23,6 +24,10 @@ export function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
     salary_period: "year",
     technologies: ["Python", "PostgreSQL"],
     source: "greenhouse",
+    // The API lists the preferred posting's source first.
+    sources: [overrides.source ?? "greenhouse"],
+    source_count: 1,
+    is_active: true,
     canonical_url: "https://job-boards.greenhouse.io/acme/jobs/4012345",
     posted_at: "2026-09-20T08:00:00Z",
     discovered_at: "2026-10-01T10:00:00Z",
@@ -32,16 +37,41 @@ export function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
   };
 }
 
+export function makePosting(overrides: Partial<JobSourcePosting> = {}): JobSourcePosting {
+  return {
+    id: "posting-1",
+    source: "greenhouse",
+    source_job_id: "4012345",
+    source_company_key: "acme",
+    original_url: "https://job-boards.greenhouse.io/acme/jobs/4012345?utm_source=x",
+    canonical_url: "https://job-boards.greenhouse.io/acme/jobs/4012345",
+    apply_url: null,
+    title: "Senior Backend Engineer (Python)",
+    company_name: "Acme GmbH",
+    location: "Berlin, Germany",
+    posted_at: "2026-09-20T08:00:00Z",
+    first_seen_at: "2026-10-01T10:00:00Z",
+    last_seen_at: "2026-10-01T10:00:00Z",
+    is_active: true,
+    status: "active",
+    is_preferred: true,
+    seen_in_latest_run: true,
+    ...overrides,
+  };
+}
+
 export function makeJobDetail(overrides: Partial<JobDetail> = {}): JobDetail {
   return {
     ...makeJob(),
     locations: ["Berlin, Germany"],
     country: null,
+    city: "Berlin",
     department: "Engineering",
     industry: null,
     description: "About Acme\n\nWe build logistics software.",
     requirements: ["5+ years of backend experience"],
     responsibilities: ["Design and build Python services"],
+    salary_text: null,
     source_job_id: "4012345",
     source_company_key: "acme",
     source_url: "https://job-boards.greenhouse.io/acme/jobs/4012345?utm_source=x",
@@ -49,6 +79,8 @@ export function makeJobDetail(overrides: Partial<JobDetail> = {}): JobDetail {
     source_updated_at: "2026-09-28T14:15:00Z",
     last_seen_at: "2026-10-01T10:00:00Z",
     first_discovered_by_you_at: "2026-10-01T10:00:00Z",
+    preferred_source_posting_id: "posting-1",
+    source_postings: [makePosting()],
     created_at: "2026-10-01T10:00:00Z",
     updated_at: "2026-10-01T10:00:00Z",
     ...overrides,
@@ -73,8 +105,13 @@ const ZERO_COUNTS = {
   beyond_limit: 0,
   duplicates: 0,
   created: 0,
+  merged: 0,
   updated: 0,
   unchanged: 0,
+  cross_source_matches: 0,
+  possible_matches: 0,
+  skipped: 0,
+  error_count: 0,
   discovered: 0,
 };
 

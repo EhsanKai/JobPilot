@@ -10,6 +10,7 @@ import { getJob, saveJob, unsaveJob } from "@/lib/api/jobs";
 import { ApiError } from "@/lib/http";
 import {
   EMPLOYMENT_TYPE_LABELS,
+  POSTING_STATUS_LABELS,
   SENIORITY_LABELS,
   WORK_MODEL_LABELS,
   formatDate,
@@ -17,7 +18,7 @@ import {
   safeExternalUrl,
   sourceLabel,
 } from "@/lib/jobs";
-import type { JobDetail } from "@/types/jobs";
+import type { JobDetail, JobSourcePosting } from "@/types/jobs";
 
 const NOT_STATED = "Not stated";
 
@@ -72,7 +73,9 @@ export function JobDetails({ jobId }: { jobId: string }) {
 
   const originalUrl = safeExternalUrl(job.canonical_url);
   const applyUrl = safeExternalUrl(job.apply_url);
-  const salary = formatSalary(job);
+  const salary = formatSalary(job) ?? job.salary_text;
+  const postingCount = job.source_postings.length;
+  const preferred = job.source_postings.find((p) => p.is_preferred) ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -110,8 +113,9 @@ export function JobDetails({ jobId }: { jobId: string }) {
       <Card>
         <h2 className="text-lg font-semibold text-slate-900">JobPilot data</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Structured by JobPilot from the posting, without AI. &quot;{NOT_STATED}&quot; means the
-          posting doesn&apos;t say.
+          Normalized by JobPilot from{" "}
+          {postingCount > 1 ? `${postingCount} source postings of this job` : "the posting"}, without
+          AI. &quot;{NOT_STATED}&quot; means the posting doesn&apos;t say.
         </p>
         <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
           <Fact label="Salary" value={salary} />
@@ -127,7 +131,13 @@ export function JobDetails({ jobId }: { jobId: string }) {
             value={job.locations.length > 0 ? job.locations.join(" · ") : job.location}
           />
           <Fact label="Department" value={job.department} />
-          <Fact label="Source" value={`${sourceLabel(job.source)}${job.source_company_key ? ` (${job.source_company_key})` : ""}`} />
+          <Fact
+            label={postingCount > 1 ? "Preferred source" : "Source"}
+            value={`${sourceLabel(job.source)}${job.source_company_key ? ` (${job.source_company_key})` : ""}`}
+          />
+          {postingCount > 1 && (
+            <Fact label="Found on" value={job.sources.map(sourceLabel).join(" · ")} />
+          )}
           <Fact label="First found for you" value={formatDate(job.first_discovered_by_you_at)} />
           <Fact label="Last seen at source" value={formatDate(job.last_seen_at)} />
         </dl>
@@ -145,10 +155,13 @@ export function JobDetails({ jobId }: { jobId: string }) {
         )}
       </Card>
 
+      <SourcesCard postings={job.source_postings} />
+
       <Card>
         <h2 className="text-lg font-semibold text-slate-900">Original job posting</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Text from {job.company_name}&apos;s posting on {sourceLabel(job.source)}. The original
+          Text from {job.company_name}&apos;s posting on {sourceLabel(job.source)}
+          {postingCount > 1 && preferred ? " (the preferred source)" : ""}. The original
           posting is the authoritative version
           {originalUrl ? (
             <>
@@ -197,6 +210,75 @@ export function JobDetails({ jobId }: { jobId: string }) {
         )}
       </Card>
     </div>
+  );
+}
+
+/** Every source posting of the job, with its original link. */
+function SourcesCard({ postings }: { postings: JobSourcePosting[] }) {
+  if (postings.length === 0) return null;
+  return (
+    <Card>
+      <h2 className="text-lg font-semibold text-slate-900">Sources</h2>
+      <p className="mt-1 text-sm text-slate-500">
+        Found on {postings.length === 1 ? "one source" : `${postings.length} sources`}. Each
+        entry is the original posting, as that source lists it.
+      </p>
+      <ul className="mt-4 flex flex-col divide-y divide-slate-100" aria-label="Found on">
+        {postings.map((posting) => (
+          <SourcePostingItem key={posting.id} posting={posting} />
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function SourcePostingItem({ posting }: { posting: JobSourcePosting }) {
+  const label = sourceLabel(posting.source);
+  const url = safeExternalUrl(posting.original_url);
+  const statusClass =
+    posting.status === "active"
+      ? "bg-emerald-50 text-emerald-700"
+      : posting.status === "stale"
+        ? "bg-slate-100 text-slate-600"
+        : "bg-amber-50 text-amber-800";
+  return (
+    <li className="flex flex-wrap items-start justify-between gap-3 py-3" aria-label={label}>
+      <div className="flex flex-col gap-1 text-sm">
+        <p className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-slate-900">{label}</span>
+          {posting.source_company_key && (
+            <span className="text-slate-500">({posting.source_company_key})</span>
+          )}
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass}`}>
+            {POSTING_STATUS_LABELS[posting.status]}
+          </span>
+          {posting.is_preferred && (
+            <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
+              Preferred
+            </span>
+          )}
+        </p>
+        <p className="text-slate-700">
+          Listed as &quot;{posting.title}&quot;
+          {posting.location ? ` in ${posting.location}` : ""}
+        </p>
+        <p className="text-xs text-slate-500">
+          First seen {formatDate(posting.first_seen_at) ?? "—"} · Last seen{" "}
+          {formatDate(posting.last_seen_at) ?? "—"}
+        </p>
+      </div>
+      {url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`View original posting on ${label}`}
+          className="text-sm font-medium text-brand-700 underline"
+        >
+          View original posting →
+        </a>
+      )}
+    </li>
   );
 }
 

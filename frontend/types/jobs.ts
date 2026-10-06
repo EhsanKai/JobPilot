@@ -50,7 +50,13 @@ export interface JobSummary {
   salary_currency: string | null;
   salary_period: SalaryPeriod | null;
   technologies: string[];
+  /** Source of the preferred posting. */
   source: string;
+  /** Every source the job was found on, preferred first (V0.4). */
+  sources: string[];
+  source_count: number;
+  /** False when no source lists the job any more. */
+  is_active: boolean;
   canonical_url: string;
   posted_at: string | null;
   discovered_at: string;
@@ -58,14 +64,39 @@ export interface JobSummary {
   saved_at: string | null;
 }
 
+export type PostingStatus = "active" | "stale" | "inactive";
+
+/** Where a job was found: one posting at one source, as that source stated it. */
+export interface JobSourcePosting {
+  id: string;
+  source: string;
+  source_job_id: string | null;
+  source_company_key: string | null;
+  original_url: string;
+  canonical_url: string;
+  apply_url: string | null;
+  title: string;
+  company_name: string;
+  location: string | null;
+  posted_at: string | null;
+  first_seen_at: string;
+  last_seen_at: string;
+  is_active: boolean;
+  status: PostingStatus;
+  is_preferred: boolean;
+  seen_in_latest_run: boolean | null;
+}
+
 export interface JobDetail extends JobSummary {
   locations: string[];
   country: string | null;
+  city: string | null;
   department: string | null;
   industry: string | null;
   description: string | null;
   requirements: string[];
   responsibilities: string[];
+  salary_text: string | null;
   source_job_id: string | null;
   source_company_key: string | null;
   source_url: string | null;
@@ -73,6 +104,8 @@ export interface JobDetail extends JobSummary {
   source_updated_at: string | null;
   last_seen_at: string;
   first_discovered_by_you_at: string | null;
+  preferred_source_posting_id: string | null;
+  source_postings: JobSourcePosting[];
   created_at: string;
   updated_at: string;
 }
@@ -110,9 +143,19 @@ export interface DiscoveryCounts {
   filtered_out: number;
   beyond_limit: number;
   duplicates: number;
+  /** New postings that became a new canonical job. */
   created: number;
+  /** New postings attached to a job another source already listed. */
+  merged: number;
   updated: number;
   unchanged: number;
+  /** Stored postings whose job is listed by two or more sources. */
+  cross_source_matches: number;
+  /** Postings that resembled an existing job but were kept separate. */
+  possible_matches: number;
+  skipped: number;
+  error_count: number;
+  /** Distinct canonical jobs stored for the user. */
   discovered: number;
 }
 

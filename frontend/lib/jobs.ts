@@ -1,5 +1,5 @@
 import type { EmploymentType, RemotePreference } from "@/types/preferences";
-import type { JobSummary, SalaryPeriod, SeniorityLevel } from "@/types/jobs";
+import type { JobSummary, PostingStatus, SalaryPeriod, SeniorityLevel } from "@/types/jobs";
 
 export const WORK_MODEL_LABELS: Record<RemotePreference, string> = {
   onsite: "On-site",
@@ -39,6 +39,23 @@ const PERIOD_LABELS: Record<SalaryPeriod, string> = {
 export function sourceLabel(source: string): string {
   const known: Record<string, string> = { greenhouse: "Greenhouse", lever: "Lever" };
   return known[source] ?? source;
+}
+
+export const POSTING_STATUS_LABELS: Record<PostingStatus, string> = {
+  active: "Active",
+  stale: "Not seen recently",
+  inactive: "No longer listed",
+};
+
+/**
+ * Where a job was found, for the job list: "via Greenhouse" for one source,
+ * "Sources: Greenhouse + Lever" for two, "Sources: 3" for more.
+ */
+export function sourceIndicator(job: Pick<JobSummary, "source" | "sources">): string {
+  const sources = job.sources && job.sources.length > 0 ? job.sources : [job.source];
+  if (sources.length <= 1) return `via ${sourceLabel(sources[0] ?? job.source)}`;
+  if (sources.length === 2) return `Sources: ${sources.map(sourceLabel).join(" + ")}`;
+  return `Sources: ${sources.length}`;
 }
 
 function formatAmount(value: string, currency: string | null): string {

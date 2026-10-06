@@ -9,6 +9,7 @@ import {
   formatDate,
   formatSalary,
   safeExternalUrl,
+  sourceIndicator,
   sourceLabel,
 } from "@/lib/jobs";
 import type { JobSummary } from "@/types/jobs";
@@ -44,9 +45,19 @@ export function JobCard({ job, isSaving = false, onToggleSave }: JobCardProps) {
           </h3>
           <p className="text-sm text-slate-600">{job.company_name}</p>
         </div>
-        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-          via {sourceLabel(job.source)}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {!job.is_active && (
+            <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
+              No longer listed
+            </span>
+          )}
+          <span
+            className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"
+            title={job.sources.length > 1 ? job.sources.map(sourceLabel).join(", ") : undefined}
+          >
+            {sourceIndicator(job)}
+          </span>
+        </div>
       </div>
 
       {facts.length > 0 && (
