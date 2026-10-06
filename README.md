@@ -316,8 +316,9 @@ E2E_PYTHON=../backend/.venv/bin/python npm run e2e
 
 Live source validation (V0.4.1) contacts the real Greenhouse and Lever APIs
 through the production pipeline and needs network access to
-`boards-api.greenhouse.io` and `api.lever.co` (it was **blocked** in the
-V0.4.1 development environment — see `docs/job-intelligence.md` §22):
+`boards-api.greenhouse.io` and `api.lever.co` (in a Claude Code cloud environment, allow these hosts in the
+environment's network access settings). The V0.4.1 run passed against 5 real
+boards; see `docs/job-intelligence.md` §22:
 
 ```bash
 cd backend

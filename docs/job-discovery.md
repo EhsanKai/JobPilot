@@ -432,7 +432,9 @@ Run status: `pending → running → completed | partial | failed`.
   an explicit step: `python -m e2e.live_sources` (or
   `JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py`) from an
   environment that can reach `boards-api.greenhouse.io` and `api.lever.co`
-  (see `docs/job-intelligence.md` §22 for the V0.4.1 result).
+  (see `docs/job-intelligence.md` §22: V0.4.1 live validation passed on
+  2026-10-06 against 5 real boards; captured responses drive regression
+  tests).
 
 ## 16. Future sources
 
