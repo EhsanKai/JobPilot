@@ -17,9 +17,17 @@ import {
   startDiscovery,
   unsaveJob,
 } from "@/lib/api/jobs";
+import { calculateMatches } from "@/lib/api/match";
 import { ApiError } from "@/lib/http";
 import { EMPTY_SEARCH, type JobSearchValues, toCriteria, toListQuery } from "@/lib/jobSearch";
-import type { DiscoveryRun, JobList, JobListQuery, JobSource, JobSummary } from "@/types/jobs";
+import type {
+  DiscoveryRun,
+  JobList,
+  JobListQuery,
+  JobSort,
+  JobSource,
+  JobSummary,
+} from "@/types/jobs";
 
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 // ~5 minutes at the default interval; the backend gives up on runs well before.
@@ -46,6 +54,9 @@ export function JobsDashboard({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: Job
   const [run, setRun] = useState<DiscoveryRun | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<JobSort | "">("");
+  const [isMatching, setIsMatching] = useState(false);
+  const [matchMessage, setMatchMessage] = useState<string | null>(null);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollCount = useRef(0);
@@ -58,7 +69,7 @@ export function JobsDashboard({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: Job
       const result = await listJobs({
         ...query,
         saved: savedOnly || undefined,
-        sort: savedOnly ? "saved" : undefined,
+        sort: sort || (savedOnly ? "saved" : undefined),
         page,
         page_size: PAGE_SIZE,
       });
@@ -68,7 +79,7 @@ export function JobsDashboard({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: Job
     } finally {
       if (mounted.current) setIsLoadingJobs(false);
     }
-  }, [query, savedOnly, page]);
+  }, [query, savedOnly, page, sort]);
 
   const loadJobsRef = useRef(loadJobs);
   loadJobsRef.current = loadJobs;
@@ -148,6 +159,27 @@ export function JobsDashboard({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: Job
     }
   }
 
+  /** Deterministic matching for the jobs on this page (no AI). */
+  async function matchVisibleJobs() {
+    if (!jobs || jobs.items.length === 0) return;
+    setIsMatching(true);
+    setMatchMessage(null);
+    try {
+      const result = await calculateMatches(jobs.items.map((job) => job.id));
+      if (!mounted.current) return;
+      setMatchMessage(
+        result.calculated > 0
+          ? `Calculated ${result.calculated} match${result.calculated === 1 ? "" : "es"}.`
+          : "All matches on this page are up to date."
+      );
+      await loadJobs();
+    } catch (error) {
+      if (mounted.current) setJobsError(errorMessage(error, "Unable to calculate matches."));
+    } finally {
+      if (mounted.current) setIsMatching(false);
+    }
+  }
+
   function applyFilters() {
     setPage(1);
     setQuery(toListQuery(values));
@@ -207,20 +239,45 @@ export function JobsDashboard({ pollIntervalMs = DEFAULT_POLL_INTERVAL_MS }: Job
               <span className="ml-1 text-sm font-normal text-slate-500">({jobs.total})</span>
             )}
           </h2>
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={savedOnly}
-              onChange={(e) => {
-                setPage(1);
-                setSavedOnly(e.target.checked);
-              }}
-            />
-            Saved only
-          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              Sort
+              <select
+                value={sort}
+                onChange={(e) => {
+                  setPage(1);
+                  setSort(e.target.value as JobSort | "");
+                }}
+                className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
+              >
+                <option value="">{savedOnly ? "Recently saved" : "Newest"}</option>
+                <option value="match">Best match</option>
+              </select>
+            </label>
+            <Button
+              variant="secondary"
+              onClick={() => void matchVisibleJobs()}
+              isLoading={isMatching}
+              disabled={!jobs || jobs.items.length === 0}
+            >
+              Calculate matches
+            </Button>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={savedOnly}
+                onChange={(e) => {
+                  setPage(1);
+                  setSavedOnly(e.target.checked);
+                }}
+              />
+              Saved only
+            </label>
+          </div>
         </div>
 
         {jobsError && <Alert variant="error">{jobsError}</Alert>}
+        {matchMessage && <Alert variant="success">{matchMessage}</Alert>}
 
         {isLoadingJobs && !jobs && <p className="text-sm text-slate-500">Loading jobs...</p>}
 
