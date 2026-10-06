@@ -54,6 +54,9 @@ from app.schemas.document_types import (
     unique_in_order,
 )
 from app.schemas.resume_profile import SkillCategory, SkillProficiencyLevel
+from app.services.taxonomy.education import EducationLevel
+from app.services.taxonomy.languages import LanguageLevel
+from app.services.taxonomy.model import SNAKE_KEY
 
 CANDIDATE_PROFILE_SCHEMA_VERSION = "candidate_profile_v1"
 
@@ -81,10 +84,9 @@ PROFILE_SECTIONS: tuple[ProfileSection, ...] = (
     "work_authorization",
 )
 
-# CEFR levels, plus "native". "unknown" when no level was stated -- never
-# derived from anything else.
-LanguageLevel = Literal["A1", "A2", "B1", "B2", "C1", "C2", "native", "unknown"]
-EducationLevel = Literal["secondary", "vocational", "bachelor", "master", "doctorate", "other"]
+# Language levels (CEFR, "native"; "unknown" when no level was stated --
+# never derived) and education levels come from the V0.5.1 taxonomy, so
+# documents and normalizers share one vocabulary.
 
 # `<resume_profile id>` optionally followed by `/<item id or derived field>`
 # inside that profile's reviewed_data.
@@ -154,8 +156,11 @@ class RoleSection(DocumentModel):
 class SkillEntry(Origin):
     #: Display name as the user or resume states it.
     name: Title
-    #: Skill taxonomy key. NULL until skill normalization exists (later V0.5).
-    skill_key: str | None = Field(default=None, min_length=1, max_length=100)
+    #: Skill taxonomy key (`app.services.taxonomy.skills`); NULL when the
+    #: skill is not in the taxonomy. Requires `metadata.taxonomy_version`.
+    skill_key: str | None = Field(
+        default=None, min_length=1, max_length=100, pattern=SNAKE_KEY.pattern
+    )
     category: SkillCategory | None = None
     proficiency: SkillProficiencyLevel = "unknown"
     years: Years | None = None
@@ -240,7 +245,7 @@ class DealBreakerEntry(DocumentModel):
 
 class EducationEntry(Origin):
     degree: str | None = Field(default=None, max_length=255)
-    #: Normalized degree level. NULL until education normalization exists.
+    #: Normalized education level (taxonomy key); NULL when unknown.
     degree_level: EducationLevel | None = None
     field_of_study: str | None = Field(default=None, max_length=255)
     institution: str | None = Field(default=None, max_length=255)
@@ -296,8 +301,8 @@ class SnapshotMetadata(DocumentModel):
     schema_version: str = Field(
         default=CANDIDATE_PROFILE_SCHEMA_VERSION, min_length=1, max_length=50
     )
-    #: Skill taxonomy version the `skill_key`s refer to; NULL while no
-    #: taxonomy exists.
+    #: Taxonomy version (`app.services.taxonomy.TAXONOMY_VERSION`) the
+    #: `skill_key`s refer to; required once any skill has a key.
     taxonomy_version: str | None = Field(default=None, min_length=1, max_length=50)
     #: Origins that contributed any value, in `PROFILE_ORIGINS` order.
     sources: list[ProfileOrigin] | None = None
@@ -376,6 +381,12 @@ class CandidateProfileDocument(DocumentModel):
         ):
             origins.add("user")
         return [origin for origin in PROFILE_ORIGINS if origin in origins]
+
+    @model_validator(mode="after")
+    def _keys_need_a_taxonomy_version(self) -> "CandidateProfileDocument":
+        if self.metadata.taxonomy_version is None and any(s.skill_key for s in self.skills):
+            raise ValueError("skill_key values need metadata.taxonomy_version")
+        return self
 
     @model_validator(mode="after")
     def _derive_metadata(self) -> "CandidateProfileDocument":

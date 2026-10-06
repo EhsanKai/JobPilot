@@ -157,6 +157,13 @@ _ANYWHERE_RE = re.compile(r"\b(?:anywhere|worldwide|global(?:ly)?|weltweit)\b")
 # dash ("Remote - Germany"; "Baden-Württemberg" stays one segment).
 _SEGMENT_RE = re.compile(r"\s*[,/|;()\[\]]\s*|\s+[-–—]\s+")
 
+# Shared with the V0.5.1 location taxonomy (app.services.taxonomy.locations),
+# which builds on these rules and tables without changing V0.4's keys.
+REMOTE_PATTERN = _REMOTE_RE
+HYBRID_PATTERN = _HYBRID_RE
+ANYWHERE_PATTERN = _ANYWHERE_RE
+SEGMENT_PATTERN = _SEGMENT_RE
+
 
 @dataclass(frozen=True)
 class NormalizedLocation:
