@@ -30,6 +30,9 @@ vi.mock("@/lib/api/documents", () => ({
   getDocument: vi.fn(),
   generateDocument: vi.fn(),
 }));
+vi.mock("@/lib/api/questions", () => ({
+  listQuestions: () => Promise.resolve({ items: [], ai: { can_generate: true, blockers: [] } }),
+}));
 vi.mock("@/lib/api/resumes", () => ({
   listResumes: (...args: unknown[]) => listResumesMock(...args),
 }));

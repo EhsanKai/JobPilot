@@ -144,6 +144,12 @@ def _kept(items: list[Any]) -> list[Any]:
     return [item for item in items if item.review_status in _ACCEPTED]
 
 
+def confirmed_personal_information(data: ResumeProfileData) -> dict[str, str]:
+    """The personal details (name, email, phone, location, links) of the
+    accepted / edited items of a confirmed profile, by field name."""
+    return {item.field: item.value for item in _kept(data.personal_information)}
+
+
 def build_candidate_facts(
     profile_id: object, data: ResumeProfileData, *, now: datetime | None = None
 ) -> CandidateFacts:
@@ -180,9 +186,9 @@ def build_candidate_facts(
         entry_id = f"exp{index}"
         ref = _ref(profile_id, item.id)
         dates = _dates(item.start_date, item.end_date, item.date_text, item.is_current)
-        header_text = _join(
-            [_join([item.job_title, item.company], " - "), item.location], ", "
-        ) + (f" ({dates})" if dates else "")
+        header_text = _join([_join([item.job_title, item.company], " - "), item.location], ", ") + (
+            f" ({dates})" if dates else ""
+        )
         if not header_text:
             header_text = "Work experience"
         catalog.add(Fact(entry_id, header_text, "experience", group=entry_id, ref=ref))

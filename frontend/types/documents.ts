@@ -8,8 +8,15 @@ export type DocumentType = "tailored_cv" | "cover_letter";
  */
 export type DocumentStatus = "generating" | "validated" | "rejected" | "failed";
 
-/** "not_run": still generating, or failed before validation could run. */
-export type ValidationStatus = "passed" | "failed" | "not_run";
+/** "not_run": still generating, or failed before validation could run.
+ *  "user_authored": the user's own edit: never checked, never shown as checked. */
+export type ValidationStatus = "passed" | "failed" | "not_run" | "user_authored";
+
+/** Whose words a version holds: the AI's (checked), a reworded one (checked), or the user's. */
+export type DocumentOrigin = "ai" | "humanized" | "user_edited";
+
+/** Whose words a piece of text is. User text cites no facts. */
+export type TextOrigin = "ai" | "user";
 
 export interface DocumentBlocker {
   code: string;
@@ -39,6 +46,10 @@ export interface DocumentSummary {
   application_context_snapshot_id: string;
   input_hash: string;
   prompt_version: string;
+  prompt_hash: string | null;
+  origin: DocumentOrigin;
+  /** The version a humanized / edited one was made from. */
+  base_document_id: string | null;
   ai_provider: string;
   ai_model: string | null;
   validation_status: ValidationStatus;
@@ -75,6 +86,7 @@ export interface SourceFact {
 export interface CvBullet {
   text: string;
   source_fact_ids: string[];
+  origin?: TextOrigin;
 }
 
 export interface TailoredCvContent {
@@ -88,7 +100,7 @@ export interface TailoredCvContent {
     location: string | null;
     links: string[];
   };
-  summary: { text: string; source_fact_ids: string[] };
+  summary: { text: string; source_fact_ids: string[]; origin?: TextOrigin };
   experience: {
     source_fact_id: string;
     company: string | null;
@@ -161,6 +173,7 @@ export interface CoverLetterContent {
     text: string;
     source_fact_ids: string[];
     job_fact_ids: string[];
+    origin?: TextOrigin;
   }[];
   /** Only when you chose to mention your salary expectation. */
   salary_statement: string | null;
@@ -175,9 +188,45 @@ export interface GeneratedDocument extends DocumentSummary {
   source_facts: Record<string, SourceFact>;
 }
 
+export interface CvPhoto {
+  content_type: string;
+  file_name: string;
+  size_bytes: number;
+  updated_at: string;
+}
+
 export interface DocumentList {
   /** Every attempt, newest first. */
   items: DocumentSummary[];
   tailored_cv: DocumentReadiness;
   cover_letter: DocumentReadiness;
+  /** The user's own photo for the CV, if they added one (V0.9). */
+  photo?: CvPhoto | null;
 }
+
+// --- Edits (V0.9) ---------------------------------------------------------------------------
+
+export interface CvEditRequest {
+  kind: "tailored_cv";
+  summary: string;
+  header: {
+    full_name: string | null;
+    email: string | null;
+    phone: string | null;
+    location: string | null;
+    links: string[];
+  };
+  experience: { source_fact_id: string; bullets: string[] }[];
+}
+
+export interface LetterEditRequest {
+  kind: "cover_letter";
+  subject: string;
+  salutation: string;
+  paragraphs: { role: LetterRole; text: string }[];
+  salary_statement: string | null;
+  closing_formula: string;
+  signature: string | null;
+}
+
+export type DocumentEditRequest = CvEditRequest | LetterEditRequest;

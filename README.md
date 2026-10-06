@@ -10,8 +10,9 @@ This repository currently implements **V0 — Foundation**,
 **V0.2 — Resume Intelligence**, **V0.3 — Job Discovery Foundation**,
 **V0.4 — Job Intelligence & Cross-Source Normalization**, the V0.5 matching
 foundations (data model and taxonomy), **V0.6 — Job Matching &
-Explainability**, **V0.7 — Application Workspace** and **V0.8 — Tailored CV &
-Anschreiben Generation**.
+Explainability**, **V0.7 — Application Workspace**, **V0.8 — Tailored CV &
+Anschreiben Generation** and **V0.9 — Application Question AI + Human Control at
+Every Stage**.
 
 ## 1. What JobPilot is
 
@@ -19,7 +20,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.8)
+## 2. Current scope (V0 – V0.9)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -208,6 +209,37 @@ cleanly rather than inventing anything. See
 editing or exporting generated documents, application question answering,
 browser automation, auto-fill or submission.
 
+V0.9 adds **Application Question AI** and makes **Human Control at Every Stage** a
+core principle: *the user always owns the application and can take over manually at
+any stage; AI output is a suggestion, user-authored content is authoritative.*
+
+- **Application questions.** Add the questions an employer asks to an Application
+  (entered by hand in V0.9; the model is source-neutral so V0.10 can add
+  browser-discovered ones). Each question can be answered entirely by hand.
+- **Suggestions, never inventions.** Structured questions (salary expectation, start
+  date, notice period, work authorization, contact details, application language)
+  are answered **from the application's own data without calling the AI**; the rest
+  gets an AI suggestion grounded in your *confirmed* resume and validated by the
+  same truth checks as V0.8 (invented numbers, tools, employers, options, dates and
+  "No because nothing was found" are rejected, never repaired). When the facts don't
+  support an answer JobPilot says **"Needs your input"** — it never guesses.
+- **Your answer vs. the suggestion.** They are stored and shown separately. Accept,
+  edit, reject, answer manually, clear, or copy your final answer. Regenerating
+  creates a new suggestion and **never** overwrites your answer; character limits are
+  enforced and your text is never truncated. Every attempt keeps its provenance
+  (prompt version and hash, provider, resume version, input hash, cited facts).
+- **✨ Humanize** rewords your Anschreiben to sound more natural, as a **new
+  version**, going through the same truth validation (it can't add facts, drop
+  facts, or change the company, role or salary); the original stays.
+- **Edit, copy, keep.** Edit the CV or letter text (saved as a new version marked
+  *edited by you*; regeneration never replaces your edit without asking), copy or
+  download as text, and add, replace or remove your own **CV photo** — a user-owned
+  asset that no AI operation touches.
+
+See [`docs/application-questions.md`](docs/application-questions.md). Not in V0.9:
+browser automation, auto-fill or submission (V0.10 and later), PDF / DOCX export, a
+rich editor, image editing.
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -363,8 +395,9 @@ Backend tests run against a separate `jobpilot_test` database (the
 with `createdb jobpilot_test` or let your Postgres role create it).
 Tests never call a real AI API: they force `AI_PROVIDER=disabled` and inject a
 deterministic fake provider backed by fixtures in `backend/tests/fixtures/resume/`
-(for V0.8 documents the fake restates the facts it is shown, and tests make it
-unfaithful on purpose to prove invented claims are rejected).
+(for V0.8 documents, V0.9 answers and Humanize the fake restates the facts it is
+shown, and tests make it unfaithful on purpose to prove invented claims are
+rejected).
 Tests never call a real job board either: sources run over a mocked HTTP
 transport with fixtures in `backend/tests/fixtures/jobs/`, and real HTTP
 transports raise inside the test suite.
@@ -406,7 +439,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.8)
+## 12. API endpoints (V0 – V0.9)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -477,6 +510,21 @@ GET    /applications/{id}/documents                  every generation attempt + 
 GET    /applications/{id}/documents/{document_id}    one validated document, its validation and sources
 POST   /applications/{id}/documents/cv               generate a new tailored CV version (no body)
 POST   /applications/{id}/documents/cover-letter     generate a new Anschreiben version (no body)
+
+POST   /applications/{id}/documents/cover-letter/humanize   ✨ reword the letter as a new, validated version (V0.9)
+POST   /applications/{id}/documents/{document_id}/edit      save your edited text as a new version (V0.9)
+PUT    /applications/{id}/cv-photo      GET / DELETE        your own CV photo (V0.9)
+
+POST   /applications/{id}/questions                         add a question (V0.9)
+GET    /applications/{id}/questions                         the questions with their answers
+GET    /applications/{id}/questions/{qid}                   PATCH / DELETE the same
+GET    /applications/{id}/questions/{qid}/generations       every attempt (audit trail)
+POST   /applications/{id}/questions/{qid}/generate          suggest an answer (deterministic, or AI)
+POST   /applications/{id}/questions/{qid}/regenerate        a new suggestion; never changes your answer
+POST   /applications/{id}/questions/{qid}/accept            accept the suggestion as your answer
+POST   /applications/{id}/questions/{qid}/reject            reject the suggestion
+POST   /applications/{id}/questions/{qid}/manual            your own answer (no AI needed)
+POST   /applications/{id}/questions/{qid}/clear             remove your answer
 ```
 
 `GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
@@ -502,7 +550,7 @@ V0.6   Job Matching & Explainability   ✅
        Job Dashboard / MVP
 V0.7   Application Workspace        ✅
 V0.8   Tailored CV + Anschreiben    ✅
-V0.9   Application Question AI
+V0.9   Application Question AI + Human Control   ✅
 V0.10  Browser Automation
 V0.11  Review & Submit
 V0.12  Application Tracking

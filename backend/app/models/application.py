@@ -26,6 +26,7 @@ from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.application_context_snapshot import ApplicationContextSnapshot
+    from app.models.application_question import ApplicationQuestion
     from app.models.generated_document import GeneratedDocument
     from app.models.job import Job
     from app.models.job_source_posting import JobSourcePosting
@@ -222,4 +223,11 @@ class Application(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="GeneratedDocument.created_at",
+    )
+    # Questions the employer asks (V0.9), in the order they were entered.
+    questions: Mapped[list["ApplicationQuestion"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ApplicationQuestion.sort_order, ApplicationQuestion.created_at",
     )

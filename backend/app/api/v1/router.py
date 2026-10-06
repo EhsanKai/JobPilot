@@ -8,6 +8,7 @@ from app.api.v1 import (
     matching,
     preferences,
     profile,
+    questions,
     resumes,
     users,
 )
@@ -21,4 +22,6 @@ api_router.include_router(resumes.router)
 api_router.include_router(matching.router)
 api_router.include_router(applications.router)
 api_router.include_router(documents.router)
+api_router.include_router(documents.photo_router)
+api_router.include_router(questions.router)
 api_router.include_router(jobs.router)

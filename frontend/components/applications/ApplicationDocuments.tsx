@@ -2,11 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { DocumentEditor } from "@/components/applications/DocumentEditor";
 import { DocumentViewer } from "@/components/applications/DocumentViewer";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { generateDocument, getDocument, listDocuments } from "@/lib/api/documents";
+import {
+  editDocument,
+  generateOverEdits,
+  humanizeLetter,
+  loadPhoto,
+  removePhoto,
+  uploadPhoto,
+} from "@/lib/api/documentActions";
+import { copyText } from "@/lib/questions";
+import { documentToText, downloadText } from "@/lib/documentText";
 import {
   DOCUMENT_TITLES,
   DOCUMENT_TYPES,
@@ -23,6 +34,7 @@ import {
 } from "@/lib/documents";
 import { ApiError } from "@/lib/http";
 import type {
+  DocumentEditRequest,
   DocumentList,
   DocumentSummary,
   DocumentType,
@@ -66,6 +78,13 @@ export function ApplicationDocuments({
   const [viewLoading, setViewLoading] = useState<string | null>(null);
   const [viewError, setViewError] = useState<string | null>(null);
   const [stalled, setStalled] = useState(false);
+  const [humanizing, setHumanizing] = useState(false);
+  const [editing, setEditing] = useState<Partial<Record<DocumentType, boolean>>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const isMounted = useRef(true);
   const polls = useRef(0);
 
@@ -92,6 +111,31 @@ export function ApplicationDocuments({
     void load();
   }, [load, reloadKey]);
 
+  // The user's own photo (V0.9): fetched as a file with their credentials and shown
+  // on the CV. It is never part of any generated document.
+  const photoStamp = list?.photo?.updated_at ?? null;
+  useEffect(() => {
+    if (photoStamp === null) {
+      setPhotoUrl(null);
+      return;
+    }
+    let url: string | null = null;
+    let cancelled = false;
+    void loadPhoto(applicationId)
+      .then((blob) => {
+        if (cancelled || blob === null || typeof URL.createObjectURL !== "function") return;
+        url = URL.createObjectURL(blob);
+        setPhotoUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setPhotoUrl(null);
+      });
+    return () => {
+      cancelled = true;
+      if (url && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(url);
+    };
+  }, [applicationId, photoStamp]);
+
   // A generation that is running on the server (another tab, a reload) is
   // followed until it ends; the server itself fails one that was abandoned,
   // so this never waits forever.
@@ -114,12 +158,14 @@ export function ApplicationDocuments({
     return () => clearTimeout(timer);
   }, [serverGenerating, busy, list, load, pollIntervalMs]);
 
-  async function generate(type: DocumentType) {
+  async function generate(type: DocumentType, overEdits = false) {
     setGenerating((current) => ({ ...current, [type]: true }));
     setProblems((current) => ({ ...current, [type]: undefined }));
     setViewing((current) => ({ ...current, [type]: undefined }));
+    setEditing((current) => ({ ...current, [type]: false }));
     try {
-      await generateDocument(applicationId, type);
+      if (overEdits) await generateOverEdits(applicationId, type);
+      else await generateDocument(applicationId, type);
     } catch (err) {
       const problem: GenerationProblem =
         err instanceof ApiError
@@ -154,6 +200,80 @@ export function ApplicationDocuments({
 
   function hide(type: DocumentType) {
     setViewing((current) => ({ ...current, [type]: undefined }));
+    setEditing((current) => ({ ...current, [type]: false }));
+  }
+
+  /** Humanize: a NEW version with a more natural tone; the current one stays as it is. */
+  async function humanize(overEdits: boolean) {
+    setHumanizing(true);
+    setProblems((current) => ({ ...current, cover_letter: undefined }));
+    try {
+      const created = await humanizeLetter(applicationId, {
+        acknowledgeEditedCurrent: overEdits,
+      });
+      if (isMounted.current) {
+        setViewing((current) => ({ ...current, cover_letter: created }));
+      }
+    } catch (err) {
+      const problem: GenerationProblem =
+        err instanceof ApiError
+          ? problemFromApi(err)
+          : { kind: "failed", message: "Humanize failed. Please try again.", violations: [] };
+      if (isMounted.current) setProblems((current) => ({ ...current, cover_letter: problem }));
+    } finally {
+      if (isMounted.current) setHumanizing(false);
+    }
+    await load();
+  }
+
+  async function saveEdit(document: GeneratedDocument, edit: DocumentEditRequest) {
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      const created = await editDocument(applicationId, document.id, edit);
+      if (!isMounted.current) return;
+      setViewing((current) => ({ ...current, [created.document_type]: created }));
+      setEditing((current) => ({ ...current, [created.document_type]: false }));
+      await load();
+    } catch (err) {
+      if (isMounted.current) {
+        setEditError(
+          err instanceof ApiError ? err.message : "Unable to save your edit. Please try again."
+        );
+      }
+    } finally {
+      if (isMounted.current) setSavingEdit(false);
+    }
+  }
+
+  async function addPhoto(file: File) {
+    setPhotoBusy(true);
+    setPhotoError(null);
+    try {
+      await uploadPhoto(applicationId, file);
+      await load();
+    } catch (err) {
+      if (isMounted.current) {
+        setPhotoError(
+          err instanceof ApiError ? err.message : "Unable to upload the photo. Please try again."
+        );
+      }
+    } finally {
+      if (isMounted.current) setPhotoBusy(false);
+    }
+  }
+
+  async function deletePhoto() {
+    setPhotoBusy(true);
+    setPhotoError(null);
+    try {
+      await removePhoto(applicationId);
+      await load();
+    } catch {
+      if (isMounted.current) setPhotoError("Unable to remove the photo. Please try again.");
+    } finally {
+      if (isMounted.current) setPhotoBusy(false);
+    }
   }
 
   return (
@@ -211,9 +331,25 @@ export function ApplicationDocuments({
               viewLoading={viewLoading}
               hasUnsavedChanges={hasUnsavedChanges}
               applicationId={applicationId}
-              onGenerate={() => void generate(type)}
+              onGenerate={(overEdits) => void generate(type, overEdits)}
               onView={(summary) => void view(summary)}
               onHide={() => hide(type)}
+              humanizing={type === "cover_letter" && humanizing}
+              onHumanize={(overEdits) => void humanize(overEdits)}
+              isEditing={Boolean(editing[type])}
+              onEdit={(value) => {
+                setEditError(null);
+                setEditing((current) => ({ ...current, [type]: value }));
+              }}
+              isSavingEdit={savingEdit}
+              editError={editError}
+              onSaveEdit={(document, edit) => void saveEdit(document, edit)}
+              photoUrl={photoUrl}
+              photo={list.photo ?? null}
+              photoBusy={photoBusy}
+              photoError={photoError}
+              onAddPhoto={(file) => void addPhoto(file)}
+              onRemovePhoto={() => void deletePhoto()}
             />
           ))}
         </div>
@@ -231,10 +367,26 @@ interface PanelProps {
   viewLoading: string | null;
   hasUnsavedChanges: boolean;
   applicationId: string;
-  onGenerate: () => void;
+  /** `overEdits`: the user confirmed replacing a current version that holds their edits. */
+  onGenerate: (overEdits: boolean) => void;
   onView: (summary: DocumentSummary) => void;
   onHide: () => void;
+  humanizing: boolean;
+  onHumanize: (overEdits: boolean) => void;
+  isEditing: boolean;
+  onEdit: (value: boolean) => void;
+  isSavingEdit: boolean;
+  editError: string | null;
+  onSaveEdit: (document: GeneratedDocument, edit: DocumentEditRequest) => void;
+  photoUrl: string | null;
+  photo: DocumentList["photo"];
+  photoBusy: boolean;
+  photoError: string | null;
+  onAddPhoto: (file: File) => void;
+  onRemovePhoto: () => void;
 }
+
+type PendingConfirm = "regenerate" | "humanize" | null;
 
 function DocumentPanel({
   type,
@@ -248,16 +400,50 @@ function DocumentPanel({
   onGenerate,
   onView,
   onHide,
+  humanizing,
+  onHumanize,
+  isEditing,
+  onEdit,
+  isSavingEdit,
+  editError,
+  onSaveEdit,
+  photoUrl,
+  photo,
+  photoBusy,
+  photoError,
+  onAddPhoto,
+  onRemovePhoto,
 }: PanelProps) {
   const title = DOCUMENT_TITLES[type];
   const readiness = list[type];
   const current = currentDocument(list.items, type);
   const attempt = pendingAttempt(list.items, type);
-  const inFlight = generatingNow || attempt?.status === "generating";
+  const inFlight = generatingNow || humanizing || attempt?.status === "generating";
   const attempts = attemptsOf(list.items, type);
   const headingId = `documents-${type}-heading`;
   const blocked = !readiness.can_generate;
   const canGenerate = !blocked && !hasUnsavedChanges && !inFlight;
+  const [confirm, setConfirm] = useState<PendingConfirm>(null);
+  const [copied, setCopied] = useState<boolean | null>(null);
+  // The current version holds the user's own edits: replacing it takes a confirmation.
+  const currentIsEdited = current?.origin === "user_edited";
+
+  function regenerate() {
+    if (currentIsEdited) setConfirm("regenerate");
+    else onGenerate(false);
+  }
+
+  function humanize() {
+    // Humanize always asks: it makes a new version, and says so.
+    setConfirm("humanize");
+  }
+
+  async function copyDocument(document: GeneratedDocument) {
+    if (document.content === null) return;
+    const ok = await copyText(documentToText(document.content));
+    setCopied(ok);
+    setTimeout(() => setCopied(null), 2500);
+  }
 
   return (
     <section aria-labelledby={headingId} data-document-type={type} className="rounded-lg border border-slate-200 p-4">
@@ -270,7 +456,8 @@ function DocumentPanel({
             current={current}
             attempt={attempt}
             inFlight={inFlight}
-            generatingNow={generatingNow}
+            generatingNow={generatingNow || humanizing}
+            humanizing={humanizing}
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -285,23 +472,84 @@ function DocumentPanel({
               >
                 View
               </Button>
+              {type === "cover_letter" && (
+                <Button
+                  variant="secondary"
+                  aria-label="Humanize cover letter"
+                  isLoading={humanizing}
+                  disabled={inFlight || confirm === "humanize"}
+                  onClick={humanize}
+                >
+                  {humanizing ? "Humanizing..." : "✨ Humanize"}
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 aria-label={`Regenerate ${title}`}
                 isLoading={generatingNow}
                 disabled={!canGenerate}
-                onClick={onGenerate}
+                onClick={regenerate}
               >
                 {generatingNow ? "Generating..." : "Regenerate"}
               </Button>
             </>
           ) : (
-            <Button isLoading={generatingNow} disabled={!canGenerate} onClick={onGenerate}>
+            <Button isLoading={generatingNow} disabled={!canGenerate} onClick={() => onGenerate(false)}>
               {generatingNow ? "Generating..." : GENERATE_LABELS[type]}
             </Button>
           )}
         </div>
       </div>
+
+      {confirm === "humanize" && (
+        <div role="group" aria-label="Confirm humanize" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>Humanize this cover letter while preserving all factual content?</p>
+          <p className="mt-1 text-xs">
+            It creates a <strong>new version</strong>: your current version stays untouched in the
+            history, and nothing the letter states is added or removed. The reworded letter is
+            checked against your resume like any generated one; if it fails, nothing changes.
+            {currentIsEdited &&
+              " Your current version contains your own edits: the new version will replace it as the current one, and yours stays in the history."}
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button
+              disabled={inFlight}
+              onClick={() => {
+                setConfirm(null);
+                onHumanize(currentIsEdited);
+              }}
+            >
+              Humanize
+            </Button>
+            <Button variant="secondary" onClick={() => setConfirm(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {confirm === "regenerate" && (
+        <div role="group" aria-label="Confirm regenerate" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p>
+            Your current version contains your own edits. Generating a new version does not delete
+            them (they stay in the history), but the new version will replace them as the current
+            one. Generate a new version anyway?
+          </p>
+          <div className="mt-2 flex gap-2">
+            <Button
+              onClick={() => {
+                setConfirm(null);
+                onGenerate(true);
+              }}
+            >
+              Generate new version
+            </Button>
+            <Button variant="secondary" onClick={() => setConfirm(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
 
       {blocked && (
         <div className="mt-3" data-testid={`${type}-blockers`}>
@@ -327,15 +575,65 @@ function DocumentPanel({
 
       {problem && <GenerationProblemView problem={problem} />}
 
-      {viewing && (
+      {type === "tailored_cv" && (
+        <CvPhotoControl
+          photo={photo}
+          photoUrl={photoUrl}
+          busy={photoBusy}
+          error={photoError}
+          onAdd={onAddPhoto}
+          onRemove={onRemovePhoto}
+        />
+      )}
+
+      {viewing && !isEditing && (
         <div>
-          <DocumentViewer document={viewing} title={title} />
-          <div className="mt-2">
+          <DocumentViewer document={viewing} title={title} photoUrl={photoUrl} />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button variant="secondary" aria-label={`Edit ${title}`} onClick={() => onEdit(true)}>
+              Edit
+            </Button>
+            <Button
+              variant="secondary"
+              aria-label={`Copy ${title}`}
+              onClick={() => void copyDocument(viewing)}
+            >
+              Copy
+            </Button>
+            <Button
+              variant="secondary"
+              aria-label={`Download ${title}`}
+              onClick={() =>
+                viewing.content &&
+                downloadText(
+                  `${type === "tailored_cv" ? "cv" : "anschreiben"}-v${viewing.version_number}.txt`,
+                  documentToText(viewing.content)
+                )
+              }
+            >
+              Download .txt
+            </Button>
             <Button variant="secondary" aria-label={`Hide ${title}`} onClick={onHide}>
               Hide
             </Button>
+            {copied !== null && (
+              <span role="status" className="text-xs text-slate-500">
+                {copied ? "Copied" : "Copy failed: select the text and copy it yourself."}
+              </span>
+            )}
           </div>
         </div>
+      )}
+
+      {viewing && isEditing && (
+        <DocumentEditor
+          document={viewing}
+          title={title}
+          isSaving={isSavingEdit}
+          error={editError}
+          onSave={(edit) => onSaveEdit(viewing, edit)}
+          onCancel={() => onEdit(false)}
+        />
       )}
 
       {attempts.length > 0 && (
@@ -352,16 +650,84 @@ function DocumentPanel({
   );
 }
 
+/**
+ * The user's own photo for the CV. It is theirs: JobPilot never generates,
+ * changes or replaces it, and regenerating or humanizing a document leaves it
+ * as it is.
+ */
+function CvPhotoControl({
+  photo,
+  photoUrl,
+  busy,
+  error,
+  onAdd,
+  onRemove,
+}: {
+  photo: DocumentList["photo"];
+  photoUrl: string | null;
+  busy: boolean;
+  error: string | null;
+  onAdd: (file: File) => void;
+  onRemove: () => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 p-3" aria-label="CV photo" role="group">
+      {photoUrl && (
+        // eslint-disable-next-line @next/next/no-img-element -- a blob URL of the user's own photo
+        <img src={photoUrl} alt="Your CV photo" className="h-14 w-14 rounded-lg object-cover" />
+      )}
+      <div className="text-sm text-slate-600">
+        <p className="font-medium text-slate-800">{photo ? "Your photo" : "No photo"}</p>
+        <p className="text-xs text-slate-500">
+          Optional and entirely yours: JobPilot never creates, changes or replaces it. JPEG or PNG,
+          up to 2 MB.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <input
+          ref={input}
+          type="file"
+          accept="image/jpeg,image/png"
+          className="sr-only"
+          aria-label="Choose photo file"
+          data-testid="photo-file"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onAdd(file);
+            event.target.value = "";
+          }}
+        />
+        <Button variant="secondary" isLoading={busy} onClick={() => input.current?.click()}>
+          {photo ? "Replace photo" : "Add photo"}
+        </Button>
+        {photo && (
+          <Button variant="secondary" disabled={busy} onClick={onRemove}>
+            Remove photo
+          </Button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="w-full text-sm text-red-700">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DocumentStatus({
   current,
   attempt,
   inFlight,
   generatingNow,
+  humanizing,
 }: {
   current: DocumentSummary | null;
   attempt: DocumentSummary | null;
   inFlight: boolean;
   generatingNow: boolean;
+  humanizing: boolean;
 }) {
   if (inFlight) {
     return (
@@ -370,7 +736,8 @@ function DocumentStatus({
           className="h-3 w-3 animate-spin rounded-full border-2 border-brand-600 border-t-transparent"
           aria-hidden="true"
         />
-        Generating... {generatingNow ? "this can take a minute." : "started in another window."}
+        {humanizing ? "Humanizing" : "Generating"}...{" "}
+        {generatingNow ? "this can take a minute." : "started in another window."}
       </p>
     );
   }
@@ -391,12 +758,19 @@ function DocumentStatus({
         {" · "}Version {current.version_number}
         {generated ? ` · Generated ${generated}` : ""}
       </p>
-      <p className="text-xs text-slate-500">
-        ✓ Checked against your resume
-        {current.resume_version_number !== null
-          ? ` (resume version ${current.resume_version_number})`
-          : ""}
-      </p>
+      {current.origin === "user_edited" ? (
+        <p className="text-xs text-amber-700">
+          ✎ Edited by you — your own words, not checked by JobPilot
+        </p>
+      ) : (
+        <p className="text-xs text-slate-500">
+          ✓ Checked against your resume
+          {current.resume_version_number !== null
+            ? ` (resume version ${current.resume_version_number})`
+            : ""}
+          {current.origin === "humanized" ? " · reworded by Humanize" : ""}
+        </p>
+      )}
       {current.is_outdated && (
         <p className="mt-1 text-xs font-medium text-amber-700">
           Outdated: your resume or application data changed since this was generated. Regenerate to
@@ -492,7 +866,9 @@ function History({
               {attempt.status === "validated" && (
                 <>
                   Version {attempt.version_number}
-                  {attempt.is_current ? " (current)" : ""} · validated
+                  {attempt.is_current ? " (current)" : ""} ·{" "}
+                  {attempt.origin === "user_edited" ? "edited by you" : "validated"}
+                  {attempt.origin === "humanized" ? " · humanized" : ""}
                 </>
               )}
               {attempt.status === "rejected" && (

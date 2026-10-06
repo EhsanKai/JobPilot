@@ -28,26 +28,42 @@ function Sources({ ids, facts }: { ids: string[]; facts: Record<string, SourceFa
   );
 }
 
+/** Marks text the user wrote themselves: it cites no facts and was not checked. */
+function YourWording() {
+  return <span className="ml-2 text-xs font-normal text-slate-400">(your wording)</span>;
+}
+
 function CvView({
   content,
   facts,
+  photoUrl,
 }: {
   content: TailoredCvContent;
   facts: Record<string, SourceFact>;
+  photoUrl: string | null;
 }) {
   const { header } = content;
   const contact = [header.email, header.phone, header.location, ...header.links].filter(Boolean);
   const emphasized = content.skills.filter((skill) => skill.emphasized);
   return (
     <div className="flex flex-col gap-6 text-sm text-slate-800">
-      <header>
-        <h4 className="text-xl font-semibold text-slate-900">{header.full_name ?? "Your name"}</h4>
-        {contact.length > 0 && <p className="mt-1 text-slate-600">{contact.join(" · ")}</p>}
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h4 className="text-xl font-semibold text-slate-900">{header.full_name ?? "Your name"}</h4>
+          {contact.length > 0 && <p className="mt-1 text-slate-600">{contact.join(" · ")}</p>}
+        </div>
+        {photoUrl && (
+          // eslint-disable-next-line @next/next/no-img-element -- a blob URL of the user's own photo
+          <img src={photoUrl} alt="Your photo" className="h-24 w-24 rounded-lg object-cover" />
+        )}
       </header>
 
       <section aria-label="Summary">
         <h5 className={SECTION_HEADING}>Summary</h5>
-        <p className="mt-1">{content.summary.text}</p>
+        <p className="mt-1">
+          {content.summary.text}
+          {content.summary.origin === "user" && <YourWording />}
+        </p>
         <Sources ids={content.summary.source_fact_ids} facts={facts} />
       </section>
 
@@ -70,6 +86,7 @@ function CvView({
                       {entry.bullets.map((bullet, index) => (
                         <li key={index}>
                           {bullet.text}
+                          {bullet.origin === "user" && <YourWording />}
                           <Sources ids={bullet.source_fact_ids} facts={facts} />
                         </li>
                       ))}
@@ -211,7 +228,10 @@ function LetterView({
       <p>{content.salutation}</p>
       {content.paragraphs.map((paragraph, index) => (
         <div key={index}>
-          <p data-role={paragraph.role}>{paragraph.text}</p>
+          <p data-role={paragraph.role}>
+            {paragraph.text}
+            {paragraph.origin === "user" && <YourWording />}
+          </p>
           <Sources ids={paragraph.source_fact_ids} facts={facts} />
         </div>
       ))}
@@ -233,8 +253,18 @@ function LetterView({
  * comes from, and how it was produced. This is the AI's original: nothing here
  * is edited, and an earlier version stays exactly as it was.
  */
-export function DocumentViewer({ document, title }: { document: GeneratedDocument; title: string }) {
+export function DocumentViewer({
+  document,
+  title,
+  photoUrl = null,
+}: {
+  document: GeneratedDocument;
+  title: string;
+  /** The user's own photo, shown on a CV (never part of the generated content). */
+  photoUrl?: string | null;
+}) {
   const { content } = document;
+  const authoredByUser = document.origin === "user_edited";
   const generated = describeGenerated(document.completed_at ?? document.created_at);
   return (
     <section
@@ -252,7 +282,7 @@ export function DocumentViewer({ document, title }: { document: GeneratedDocumen
           <dd className="inline font-medium text-slate-700">{languageName(document.language)}</dd>
         </div>
         <div>
-          <dt className="inline">Generated </dt>
+          <dt className="inline">{authoredByUser ? "Saved " : "Generated "}</dt>
           <dd className="inline font-medium text-slate-700">{generated}</dd>
         </div>
         {document.resume_version_number !== null && (
@@ -263,25 +293,45 @@ export function DocumentViewer({ document, title }: { document: GeneratedDocumen
         )}
         <div>
           <dt className="inline">Validation </dt>
-          <dd className="inline font-medium text-emerald-700">
-            {document.validation_status === "passed"
-              ? "Passed — every statement is backed by your resume"
-              : document.validation_status}
-          </dd>
+          {authoredByUser ? (
+            <dd className="inline font-medium text-amber-700">
+              Your own words — not checked by JobPilot
+            </dd>
+          ) : (
+            <dd className="inline font-medium text-emerald-700">
+              {document.validation_status === "passed"
+                ? "Passed — every statement is backed by your resume"
+                : document.validation_status}
+            </dd>
+          )}
         </div>
         <div>
-          <dt className="inline">Produced by </dt>
+          <dt className="inline">{authoredByUser ? "Made by " : "Produced by "}</dt>
           <dd className="inline font-medium text-slate-700">
-            {document.ai_provider}
-            {document.ai_model ? ` (${document.ai_model})` : ""} · {document.prompt_version}
+            {authoredByUser ? (
+              "You (edited from an earlier version)"
+            ) : (
+              <>
+                {document.ai_provider}
+                {document.ai_model ? ` (${document.ai_model})` : ""} · {document.prompt_version}
+              </>
+            )}
           </dd>
         </div>
+        {document.origin === "humanized" && (
+          <div>
+            <dt className="inline">Reworded </dt>
+            <dd className="inline font-medium text-slate-700">
+              by Humanize from an earlier version; every fact checked again
+            </dd>
+          </div>
+        )}
       </dl>
       <div className="rounded-lg bg-white p-5 shadow-sm">
         {content === null ? (
           <p className="text-sm text-slate-500">This document has no content.</p>
         ) : content.kind === "tailored_cv" ? (
-          <CvView content={content} facts={document.source_facts} />
+          <CvView content={content} facts={document.source_facts} photoUrl={photoUrl} />
         ) : (
           <LetterView content={content} facts={document.source_facts} />
         )}

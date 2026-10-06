@@ -5,6 +5,17 @@ from app.models.application import (
     WorkAuthorization,
 )
 from app.models.application_context_snapshot import ApplicationContextSnapshot
+from app.models.application_photo import ApplicationPhoto
+from app.models.application_question import (
+    AnswerSource,
+    AnswerStatus,
+    ApplicationQuestion,
+    ApplicationQuestionAnswer,
+    ApplicationQuestionGeneration,
+    GenerationMethod,
+    GenerationOutcome,
+    QuestionType,
+)
 from app.models.candidate_profile_version import (
     CandidateProfileVersion,
     CandidateProfileVersionReason,
@@ -13,6 +24,7 @@ from app.models.deal_breaker import DealBreaker, DealBreakerType
 from app.models.discovery_run import DiscoveryRun, DiscoveryRunStatus
 from app.models.generated_document import (
     GeneratedDocument,
+    GeneratedDocumentOrigin,
     GeneratedDocumentStatus,
     GeneratedDocumentType,
 )
@@ -92,6 +104,16 @@ __all__ = [
     "WorkAuthorization",
     "ApplicationContextSnapshot",
     "GeneratedDocument",
+    "GeneratedDocumentOrigin",
+    "ApplicationPhoto",
+    "ApplicationQuestion",
+    "ApplicationQuestionAnswer",
+    "ApplicationQuestionGeneration",
+    "QuestionType",
+    "AnswerSource",
+    "AnswerStatus",
+    "GenerationMethod",
+    "GenerationOutcome",
     "GeneratedDocumentType",
     "GeneratedDocumentStatus",
     "CandidateProfileVersion",

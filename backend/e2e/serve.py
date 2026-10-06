@@ -14,7 +14,9 @@ The AI is a deterministic stub as well (`E2EStubAI`, in this file only -- nothin
 in `app/` can reach it): it analyzes the fixture resume with the canned parser
 output, and writes tailored documents by restating the very facts it is shown,
 so the browser flow exercises the real pipeline -- context, structured output,
-truth validation, versioning, storage -- without a real provider. It says
+truth validation, versioning, storage -- without a real provider. Answers to
+application questions are faithful restatements of a supported fact (or "needs
+input"), and Humanize rewords the stub's own sentences without changing a claim. It says
 nothing about the quality of any real model.
 
 Mock content: one SAP vacancy published on both boards (Cologne / "Köln",
@@ -67,10 +69,11 @@ def main() -> None:
     from app.ai.factory import get_ai_provider
     from app.ai.provider import AINotConfiguredError, T
     from app.main import app
-    from app.schemas.document_ai import AICoverLetter, AITailoredCV
+    from app.schemas.document_ai import AICoverLetter, AIHumanizedLetter, AITailoredCV
+    from app.schemas.question_ai import AIQuestionAnswer
     from app.schemas.resume_profile import ParsedResume
     from app.services.job_discovery.registry import get_job_source_registry
-    from tests.document_helpers import FakeDocumentAI
+    from tests.humanize_helpers import FakeHumanizeAI
     from tests.job_helpers import (
         FakeJobBoards,
         cross_source_registry,
@@ -89,10 +92,11 @@ def main() -> None:
     )
     app.dependency_overrides[get_job_source_registry] = lambda: registry
 
-    class E2EStubAI(FakeDocumentAI):
+    class E2EStubAI(FakeHumanizeAI):
         """Visible in every document's provenance as "e2e-stub".
 
-        It serves only what the V0.8 flow needs. For anything else (the V0.6
+        It serves only what the V0.8 / V0.9 flows need: documents, answers to
+        application questions and Humanize. For anything else (the V0.6
         match explanation) it behaves as before it existed: no provider is
         configured, so that spec still sees the "not available" path."""
 
@@ -100,8 +104,15 @@ def main() -> None:
         model = "e2e-stub-1"
 
         async def generate_structured(self, *, system: str, prompt: str, schema: type[T]) -> T:
-            if schema not in (ParsedResume, AITailoredCV, AICoverLetter):
-                raise AINotConfiguredError("the E2E stub serves resumes and documents only")
+            served = (
+                ParsedResume,
+                AITailoredCV,
+                AICoverLetter,
+                AIQuestionAnswer,
+                AIHumanizedLetter,
+            )
+            if schema not in served:
+                raise AINotConfiguredError("the E2E stub serves documents and answers only")
             return await super().generate_structured(system=system, prompt=prompt, schema=schema)
 
     stub = E2EStubAI()

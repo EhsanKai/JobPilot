@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     STORAGE_PROVIDER: str = "local"
     STORAGE_PATH: str = "./storage/resumes"
     MAX_RESUME_SIZE_MB: int = 10
+    # The user's own photo for a tailored CV (V0.9).
+    MAX_PHOTO_SIZE_MB: int = 2
 
     # AI provider (V0.2 Resume Intelligence). Credentials only ever come from
     # the environment. AI_PROVIDER="disabled" (or a missing API key) makes

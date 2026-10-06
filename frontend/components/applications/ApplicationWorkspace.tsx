@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
 import { ApplicationDocuments } from "@/components/applications/ApplicationDocuments";
+import { ApplicationQuestions } from "@/components/applications/ApplicationQuestions";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -203,6 +204,14 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
         This is your private preparation workspace. Starting an application does not submit it:
         nothing here is sent to {job.company_name}.
       </Alert>
+
+      <nav aria-label="Workspace sections" className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        {WORKSPACE_SECTIONS.map(([label, target]) => (
+          <a key={target} href={`#${target}`} className="font-medium text-brand-700 hover:underline">
+            {label}
+          </a>
+        ))}
+      </nav>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="flex flex-col gap-6 lg:col-span-2">
@@ -477,6 +486,8 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
             reloadKey={application.updated_at}
             hasUnsavedChanges={dirty}
           />
+
+          <ApplicationQuestions applicationId={application.id} />
         </div>
 
         <aside className="flex flex-col gap-6">
@@ -487,6 +498,20 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
     </div>
   );
 }
+
+/**
+ * The parts of an application workspace, in the order a user works through them:
+ *   Job -> Match -> Preparation -> CV -> Anschreiben -> Questions -> Notes
+ */
+const WORKSPACE_SECTIONS: [string, string][] = [
+  ["Job", "job-heading"],
+  ["Match", "match-summary-heading"],
+  ["Preparation", "preparation-heading"],
+  ["CV", "documents-tailored_cv-heading"],
+  ["Anschreiben", "documents-cover_letter-heading"],
+  ["Questions", "questions-heading"],
+  ["Notes", "notes-heading"],
+];
 
 /** The job as it was when the application was started, with its original links. */
 function JobCard({ application }: { application: Application }) {

@@ -37,6 +37,22 @@ class GeneratedDocumentType(str, enum.Enum):
     COVER_LETTER = "cover_letter"
 
 
+class GeneratedDocumentOrigin(str, enum.Enum):
+    """How a version came to be (V0.9). Every version is an immutable row; the
+    origin says whose words it holds.
+
+    AI         generated from the confirmed resume and truth-validated (V0.8)
+    HUMANIZED  an earlier version re-worded by the AI for a more natural tone,
+               and truth-validated like any generation
+    USER_EDITED  a version the user saved after editing: the user's own words,
+               never checked, never overwritten by the AI
+    """
+
+    AI = "ai"
+    HUMANIZED = "humanized"
+    USER_EDITED = "user_edited"
+
+
 class GeneratedDocumentStatus(str, enum.Enum):
     """Where one generation attempt is.
 
@@ -137,6 +153,11 @@ class GeneratedDocument(Base, TimestampMixin):
             name="ck_generated_documents_version_number",
         ),
         CheckConstraint("language ~ '^[a-z]{2}$'", name="ck_generated_documents_language"),
+        # A humanized or edited version is derived from another version (V0.9).
+        CheckConstraint(
+            "(origin = 'AI') = (base_document_id IS NULL)",
+            name="ck_generated_documents_base_iff_derived",
+        ),
         Index(
             "ix_generated_documents_application_type_created",
             "application_id",
@@ -187,8 +208,27 @@ class GeneratedDocument(Base, TimestampMixin):
     # SHA-256 of the exact generation input (facts, job, application data).
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    #: SHA-256 of the prompt file that produced it (V0.9; NULL for V0.8 rows).
+    prompt_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ai_provider: Mapped[str] = mapped_column(String(50), nullable=False)
     ai_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # --- Origin (V0.9) -----------------------------------------------------------------------
+    origin: Mapped[GeneratedDocumentOrigin] = mapped_column(
+        Enum(GeneratedDocumentOrigin, name="generated_document_origin"),
+        default=GeneratedDocumentOrigin.AI,
+        server_default=GeneratedDocumentOrigin.AI.name,
+        nullable=False,
+    )
+    #: The version a humanized / edited one was made from. It stays untouched.
+    base_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        # NO ACTION: a version cannot be deleted from under the versions made from
+        # it (and a SET NULL would break ck_generated_documents_base_iff_derived).
+        # Deleting the whole application still removes them together.
+        ForeignKey("generated_documents.id", name="fk_generated_documents_base_document"),
+        nullable=True,
+    )
 
     # --- Result -----------------------------------------------------------------------------
     # The validated `TailoredCvContent` / `CoverLetterContent`, as JSON. Only
@@ -210,6 +250,10 @@ class GeneratedDocument(Base, TimestampMixin):
     @validates("input_hash")
     def _validate_hash(self, key: str, value: str) -> str:
         return require_sha256_hex(key, value)
+
+    @validates("prompt_hash")
+    def _validate_prompt_hash(self, key: str, value: str | None) -> str | None:
+        return None if value is None else require_sha256_hex(key, value)
 
     @validates("content")
     def _validate_content(self, key: str, value: Any) -> dict[str, Any] | None:

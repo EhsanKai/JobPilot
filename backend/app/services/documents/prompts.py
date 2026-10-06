@@ -20,6 +20,9 @@ from app.services.documents.context import GenerationContext
 TAILORED_CV_PROMPT_VERSION = "tailored_cv_v1"
 COVER_LETTER_PROMPT_VERSION = "cover_letter_v1"
 
+#: V0.9: reword a validated letter for a natural tone (a new version, validated like any).
+HUMANIZE_PROMPT_VERSION = "cover_letter_humanize_v1"
+
 PROMPT_VERSIONS: dict[GeneratedDocumentType, str] = {
     GeneratedDocumentType.TAILORED_CV: TAILORED_CV_PROMPT_VERSION,
     GeneratedDocumentType.COVER_LETTER: COVER_LETTER_PROMPT_VERSION,
@@ -30,6 +33,7 @@ PROMPT_VERSIONS: dict[GeneratedDocumentType, str] = {
 PROMPT_FINGERPRINTS: dict[str, str] = {
     TAILORED_CV_PROMPT_VERSION: "5a055b22995b668083c863c895580170ec42dbfeb7cc50334619cc1453faea80",
     COVER_LETTER_PROMPT_VERSION: "2c27ab7867e9ee9774324276ed95b443f5f65b9f6e74c09a32b606b045b89ef8",
+    HUMANIZE_PROMPT_VERSION: "0cb0696576959a9d3c15fc3d503372c7a3053b220fbbf9cf73c7d61fcdb06ad1",
 }
 
 _TASKS = {

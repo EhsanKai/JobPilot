@@ -125,3 +125,26 @@ class AICoverLetter(_AIModel):
 
     language: str = Field(description="ISO 639-1 code of the language the letter is written in.")
     paragraphs: list[AILetterParagraph] = Field(max_length=MAX_PARAGRAPHS)
+
+
+class AIHumanizedParagraph(_AIModel):
+    role: LetterRole = Field(description="The role of the paragraph being reworded, unchanged.")
+    text: str = Field(
+        description=(
+            "The paragraph reworded to sound natural and human. Same meaning, same facts: "
+            "add nothing, remove nothing that matters."
+        ),
+        max_length=MAX_PARAGRAPH_CHARS,
+    )
+    source_fact_ids: list[str] = Field(
+        default_factory=list,
+        description="The ids of the facts the original paragraph cites, unchanged.",
+        max_length=MAX_FACT_IDS,
+    )
+
+
+class AIHumanizedLetter(_AIModel):
+    """Root of the Humanize contract: the same paragraphs, reworded."""
+
+    language: str = Field(description="ISO 639-1 code of the letter's language, unchanged.")
+    paragraphs: list[AIHumanizedParagraph] = Field(max_length=MAX_PARAGRAPHS)

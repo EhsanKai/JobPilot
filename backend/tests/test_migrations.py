@@ -8,6 +8,7 @@
     V0.6 data  -> upgrade -> downgrade -> upgrade    (V0.7 roundtrip, application workspace)
     V0 data    -> upgrade head                       (V0 application gets its UserJob + context)
     V0.7 data  -> upgrade -> downgrade -> upgrade    (V0.8 roundtrip, tailored documents)
+    V0.8 data  -> upgrade -> downgrade -> upgrade    (V0.9 roundtrip, questions and document origin)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -46,6 +47,7 @@ V05 = "a56b296b53a5"
 V06 = "c7d2e9f4b1a6"
 V07 = "e8b3c1a5d7f2"
 V08 = "f1a6d3c8b2e4"
+V09 = "a9d4f2b7c1e3"
 
 USER_ID = uuid.UUID("00000000-0000-4000-8000-0000000000a1")
 GH_JOB = uuid.UUID("00000000-0000-4000-8000-0000000000b1")
@@ -1338,3 +1340,258 @@ def test_deleting_an_application_user_or_snapshot_removes_its_documents(
     assert rows(migration_db, "SELECT id FROM generated_documents") == [{"id": DOCUMENT_IDS[1]}]
     execute(migration_db, "DELETE FROM users WHERE id = :id", id=USER_ID)
     assert rows(migration_db, "SELECT id FROM generated_documents") == []
+
+
+# --- V0.9: application questions, document origin, CV photo --------------------------------------
+
+V09_TABLES = {
+    "application_questions",
+    "application_question_answers",
+    "application_question_generations",
+    "application_photos",
+}
+V09_ENUMS = {
+    "application_question_type": [
+        "FREE_TEXT", "YES_NO", "SINGLE_CHOICE", "MULTI_CHOICE", "NUMERIC", "DATE", "SALARY",
+        "UNKNOWN",
+    ],
+    "application_answer_status": [
+        "NOT_STARTED", "NEEDS_INPUT", "SUGGESTED", "ACCEPTED", "USER_EDITED", "REJECTED",
+    ],
+    "application_answer_source": ["DETERMINISTIC", "AI", "USER", "HYBRID"],
+    "application_generation_method": ["DETERMINISTIC", "AI"],
+    "application_generation_outcome": ["SUGGESTED", "NEEDS_INPUT", "REJECTED", "FAILED"],
+    "generated_document_origin": ["AI", "HUMANIZED", "USER_EDITED"],
+}
+V09_CONSTRAINTS = {
+    "fk_application_questions_application": "FOREIGN KEY (application_id, user_id) "
+    "REFERENCES applications(id, user_id) ON DELETE CASCADE",
+    "uq_application_questions_id_user_id": "UNIQUE (id, user_id)",
+    "fk_application_question_answers_question": "FOREIGN KEY (question_id, user_id) "
+    "REFERENCES application_questions(id, user_id) ON DELETE CASCADE",
+    "uq_application_question_answers_question_id": "UNIQUE (question_id)",
+    "fk_application_question_generations_question": "FOREIGN KEY (question_id, user_id) "
+    "REFERENCES application_questions(id, user_id) ON DELETE CASCADE",
+    "fk_application_photos_application": "FOREIGN KEY (application_id, user_id) "
+    "REFERENCES applications(id, user_id) ON DELETE CASCADE",
+    "uq_application_photos_application_id": "UNIQUE (application_id)",
+    "fk_generated_documents_base_document": "FOREIGN KEY (base_document_id) "
+    "REFERENCES generated_documents(id)",
+}
+V09_CHECKS = {
+    "ck_application_questions_max_length",
+    "ck_application_questions_options_array",
+    "ck_application_questions_choice_has_options",
+    "ck_application_question_answers_final_iff_decided",
+    "ck_application_question_answers_source_iff_final",
+    "ck_application_question_answers_accepted_source",
+    "ck_application_question_answers_edited_source",
+    "ck_application_question_answers_suggestion_exists",
+    "ck_application_question_answers_needs_input_empty",
+    "ck_application_question_generations_suggested_has_value",
+    "ck_application_question_generations_only_suggested_has_value",
+    "ck_application_question_generations_ai_provenance",
+    "ck_generated_documents_base_iff_derived",
+}
+QUESTION_ID = uuid.UUID("00000000-0000-4000-8000-0000000000e1")
+OLD_DOCUMENT_COLUMNS = (
+    "id, application_id, user_id, document_type, status, version_number, language, resume_id, "
+    "resume_profile_id, resume_version_number, application_context_snapshot_id, input_hash, "
+    "prompt_version, ai_provider, ai_model, content, source_facts, validation, error_code, "
+    "error_message, completed_at, created_at, updated_at"
+)
+
+
+def build_v08_database(engine: Engine, config: Config) -> None:
+    """A V0.8 database with realistic documents: two CV versions, a letter and a
+    failed attempt, for two applications."""
+    build_v07_database(engine, config)
+    command.upgrade(config, V08)
+    content = '{"kind": "tailored_cv", "text": "kept as it is"}'
+    insert_document(engine, DOCUMENT_IDS[0], application=APPLICATION_ID, content=content)
+    insert_document(engine, DOCUMENT_IDS[1], application=APPLICATION_ID, version=2, content=content)
+    insert_document(
+        engine, DOCUMENT_IDS[2], application=V07_ONLY_APPLICATION, kind="COVER_LETTER",
+        content=content,
+    )
+    insert_document(
+        engine, DOCUMENT_IDS[3], application=APPLICATION_ID, status="FAILED", version=None,
+        content=None,
+    )
+
+
+def insert_question(engine: Engine, *, user: uuid.UUID = USER_ID, **overrides: Any) -> None:
+    values: dict[str, Any] = {
+        "id": QUESTION_ID,
+        "application": APPLICATION_ID,
+        "user": user,
+        "type": "FREE_TEXT",
+        "options": None,
+    }
+    values.update(overrides)
+    execute(
+        engine,
+        "INSERT INTO application_questions (id, application_id, user_id, question_text, "
+        "normalized_question_text, question_hash, question_type, required, options, sort_order) "
+        "VALUES (:id, :application, :user, 'Why us?', 'why us', repeat('b', 64), "
+        "CAST(:type AS application_question_type), false, CAST(:options AS jsonb), 0)",
+        **values,
+    )
+
+
+def assert_v09_schema(engine: Engine) -> None:
+    assert V09_TABLES <= user_tables(engine)
+    enums = enum_values(engine)
+    for name, values in V09_ENUMS.items():
+        assert enums[name] == values, name
+    constraints = {
+        r["conname"]: r["definition"]
+        for r in rows(
+            engine,
+            "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid IN ('generated_documents'::regclass, "
+            "'application_questions'::regclass, 'application_question_answers'::regclass, "
+            "'application_question_generations'::regclass, 'application_photos'::regclass)",
+        )
+    }
+    for name, definition in V09_CONSTRAINTS.items():
+        assert constraints.get(name) == definition, name
+    assert V09_CHECKS <= set(constraints)
+    indexes = {
+        r["indexname"]: r["indexdef"]
+        for r in rows(
+            engine,
+            "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'application_questions'",
+        )
+    }
+    external = indexes["uq_application_questions_external_key"]
+    assert "UNIQUE" in external and "WHERE" in external and "external_key IS NOT NULL" in external
+    assert "ix_application_questions_application_sort" in indexes
+    columns = {
+        r["column_name"]: (r["is_nullable"], r["column_default"])
+        for r in rows(
+            engine,
+            "SELECT column_name, is_nullable, column_default FROM information_schema.columns "
+            "WHERE table_name = 'generated_documents'",
+        )
+    }
+    assert columns["origin"][0] == "NO" and "'AI'" in str(columns["origin"][1])
+    assert columns["base_document_id"][0] == "YES" and columns["prompt_hash"][0] == "YES"
+
+
+def test_v08_data_survives_v09_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v08_database(migration_db, config)
+
+    v08_tables = user_tables(migration_db)
+    assert not (V09_TABLES & v08_tables)
+    data_before = data_fingerprints(migration_db, v08_tables)
+    enums_before = enum_values(migration_db)
+    old_documents = rows(
+        migration_db, f"SELECT {OLD_DOCUMENT_COLUMNS} FROM generated_documents ORDER BY id"
+    )
+    assert data_before["generated_documents"][0] == 4
+
+    # V0.8 -> V0.9: purely additive. Every V0.8 document keeps every old value;
+    # it simply becomes origin 'AI' with no base document and no prompt hash.
+    command.upgrade(config, V09)
+    assert user_tables(migration_db) == v08_tables | V09_TABLES
+    assert_v09_schema(migration_db)
+    assert {k: v for k, v in data_fingerprints(migration_db, v08_tables).items()
+            if k != "generated_documents"} == {
+        k: v for k, v in data_before.items() if k != "generated_documents"
+    }
+    assert rows(
+        migration_db, f"SELECT {OLD_DOCUMENT_COLUMNS} FROM generated_documents ORDER BY id"
+    ) == old_documents
+    assert rows(
+        migration_db,
+        "SELECT DISTINCT origin::text AS origin, base_document_id, prompt_hash "
+        "FROM generated_documents",
+    ) == [{"origin": "AI", "base_document_id": None, "prompt_hash": None}]
+    other_enums = {k: v for k, v in enum_values(migration_db).items() if k not in V09_ENUMS}
+    assert other_enums == enums_before
+    for table in V09_TABLES:
+        assert rows(migration_db, f'SELECT count(*) AS n FROM "{table}"') == [{"n": 0}]
+
+    # The new tables work against migrated V0.8 applications ...
+    insert_question(migration_db)
+    execute(
+        migration_db,
+        "INSERT INTO application_question_answers (id, question_id, user_id, status, "
+        "ai_source_fact_ids, suggestion_dismissed) "
+        "VALUES (gen_random_uuid(), :q, :u, 'NOT_STARTED', '[]'::jsonb, false)",
+        q=QUESTION_ID, u=USER_ID,
+    )
+    # ... and enforce what they promise.
+    for bad, message in (
+        # someone else's application
+        ({"user": uuid.uuid4()}, "fk_application_questions_application"),
+        ({"type": "SINGLE_CHOICE"}, "ck_application_questions_choice_has_options"),
+        ({"options": "{}"}, "ck_application_questions_options_array"),
+    ):
+        with pytest.raises(Exception, match=message):
+            insert_question(migration_db, id=uuid.uuid4(), **bad)
+    second = uuid.UUID("00000000-0000-4000-8000-0000000000e2")
+    insert_question(migration_db, id=second)
+    with pytest.raises(Exception, match="fk_application_question_answers_question"):
+        execute(
+            migration_db,
+            "INSERT INTO application_question_answers (id, question_id, user_id, status, "
+            "ai_source_fact_ids, suggestion_dismissed) "
+            "VALUES (gen_random_uuid(), :q, :u, 'NOT_STARTED', '[]'::jsonb, false)",
+            q=second, u=uuid.uuid4(),
+        )
+    with pytest.raises(Exception, match="ck_application_question_answers_final_iff_decided"):
+        execute(
+            migration_db,
+            "UPDATE application_question_answers SET status = 'ACCEPTED' WHERE question_id = :q",
+            q=QUESTION_ID,
+        )
+    with pytest.raises(Exception, match="ck_generated_documents_base_iff_derived"):
+        execute(
+            migration_db,
+            "UPDATE generated_documents SET origin = 'HUMANIZED' WHERE id = :id",
+            id=DOCUMENT_IDS[0],
+        )
+    # a derived document names its base, and the base cannot be deleted from under it ...
+    execute(
+        migration_db,
+        "UPDATE generated_documents SET origin = 'USER_EDITED', base_document_id = :base "
+        "WHERE id = :id",
+        base=DOCUMENT_IDS[0], id=DOCUMENT_IDS[1],
+    )
+    with pytest.raises(Exception, match="fk_generated_documents_base_document"):
+        execute(migration_db, "DELETE FROM generated_documents WHERE id = :id", id=DOCUMENT_IDS[0])
+    # ... but deleting the application removes the whole family in one statement.
+    execute(migration_db, "DELETE FROM applications WHERE id = :id", id=APPLICATION_ID)
+    assert rows(migration_db, "SELECT count(*) AS n FROM application_questions") == [{"n": 0}]
+    answers = rows(migration_db, "SELECT count(*) AS n FROM application_question_answers")
+    assert answers == [{"n": 0}]
+
+
+def test_v09_downgrade_restores_the_v08_schema_and_data_exactly(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v08_database(migration_db, config)
+    v08_tables = user_tables(migration_db)
+    data_before = data_fingerprints(migration_db, v08_tables)
+    schema_before = schema_fingerprint(migration_db, v08_tables)
+    enums_before = enum_values(migration_db)
+
+    command.upgrade(config, V09)
+    insert_question(migration_db)  # V0.9-only data: lost on downgrade, by design
+    command.downgrade(config, V08)
+
+    assert user_tables(migration_db) == v08_tables
+    assert schema_fingerprint(migration_db, v08_tables) == schema_before
+    assert enum_values(migration_db) == enums_before
+    assert data_fingerprints(migration_db, v08_tables) == data_before
+
+    # and upgrading again works, with the schema exactly what the models declare
+    command.upgrade(config, "head")
+    assert_v09_schema(migration_db)
+    fingerprints = data_fingerprints(migration_db, v08_tables)
+    assert fingerprints["applications"] == data_before["applications"]
+    with migration_db.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == []

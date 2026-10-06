@@ -52,6 +52,15 @@ const VIOLATION_LABELS: Record<string, string> = {
   DUPLICATE_SKILL: "A skill listed twice",
   INVALID_STRUCTURE: "A letter without the expected structure",
   EMPTY_TEXT: "Empty text",
+  // V0.9: Humanize and application questions
+  FACT_DROPPED: "Something from the original letter was left out",
+  IDENTITY_NOT_PRESERVED: "The position or company named in the original was left out",
+  UNCHANGED: "Nothing was reworded",
+  ANSWER_TOO_LONG: "An answer longer than the character limit",
+  INVALID_OPTION: "An option the question doesn't list",
+  INVALID_ANSWER_FORMAT: "An answer in the wrong format",
+  UNSUPPORTED_TOPIC: "Facts that aren't about what the question asks",
+  UNSUPPORTED_NEGATIVE: "A \"No\" that no fact supports",
 };
 
 export function violationLabel(violation: DocumentViolation): string {

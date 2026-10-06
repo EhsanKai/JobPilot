@@ -22,7 +22,25 @@ generation, no AI, no browser automation, no auto-fill or submission, and no
 new matching logic (see [§17](#17-scope-and-whats-deferred)). V0.8 builds on it:
 the tailored CV and Anschreiben are generated from an application's context
 snapshot, resume reference and preparation data (see
-[`tailored-documents.md`](tailored-documents.md)).
+[`tailored-documents.md`](tailored-documents.md)). V0.9 adds the employer's
+**application questions** to the workspace, with suggested answers the user
+controls, plus Humanize / edit / photo for the documents (see
+[`application-questions.md`](application-questions.md)).
+
+**Workspace sections** (the in-page navigation of `/applications/[id]`):
+
+```
+Application
+├── Job · Match                    what you are applying to, and how well it fits
+├── Preparation                    salary, availability, notice period, language, resume
+├── CV · Anschreiben               generated, editable, copyable, versioned        (V0.8 / V0.9)
+├── Questions                      the employer's questions and your answers       (V0.9)
+└── Notes                          private
+```
+
+**Human Control at Every Stage** is a core principle of the workspace: the user owns
+the application and can complete it without AI; AI suggestions are never authoritative
+over user-authored content.
 
 ## Contents
 

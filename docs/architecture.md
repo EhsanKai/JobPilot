@@ -1,9 +1,12 @@
-# JobPilot Architecture — V0 to V0.8
+# JobPilot Architecture — V0 to V0.9
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.8 Tailored CV & Anschreiben generation
+to build on them without a rewrite. V0.9 Application Question AI + Human
+Control is summarized in §20 and documented in full in
+[`application-questions.md`](application-questions.md).
+V0.8 Tailored CV & Anschreiben generation
 is summarized in §19 and documented in full in
 [`tailored-documents.md`](tailored-documents.md).
 V0.7 Application Workspace is
@@ -715,3 +718,90 @@ Application ─► generation context ─► AIProvider ─► structured output
   it arrives), PDF / DOCX export, AI answers to application questions (V0.9),
   browser automation and auto-fill (V0.10), review and submission (V0.11),
   tracking (V0.12).
+
+## 20. V0.9 — Application Question AI + Human Control at Every Stage
+
+Full documentation: [`application-questions.md`](application-questions.md).
+
+### 20.1 The principle: Human Control at Every Stage
+
+> The user always owns the application and must be able to take over manually at
+> any stage. AI never creates a dependency the user cannot continue without. AI
+> output is a *suggestion*; user-authored content is *authoritative*; an AI
+> suggestion never silently overwrites it.
+
+This is a product principle that shapes architecture, APIs, data models, UI and the
+future browser automation. At every stage the user can inspect, edit, reject,
+replace, copy, export and continue manually, and return to AI later.
+
+### 20.2 The Human Control Boundary
+
+Every AI-generated artifact has a **user-owned final representation**, kept apart
+from the AI's. Content crosses the boundary only by an explicit user action.
+
+```
+AI side                                     user side
+-----------------------------------------   ----------------------------------------
+Application question   suggestion (ai_*)     answer (final_*)          accept · edit · manual · clear
+Tailored CV            ai / humanized        user_edited version       edit · confirm before superseding
+Anschreiben            ai / humanized        user_edited version       edit · confirm before superseding
+Browser-filled field   filled value (V0.10)  what the user sees/edits  edit before submission
+CV photo               —                     the user's own file       only the user changes it
+```
+
+It is documented as a **pattern, not a framework**: each artifact implements it in
+the shape that fits (separate columns on the answer; an immutable version row with an
+`origin` for documents), because the current code does not justify a generic
+mechanism. The enforced rules: a client cannot send a suggestion, a validation result
+or provenance; `generate` / `regenerate` replace only the suggestion and need an
+acknowledgement when the user already has an answer; replacing an answer or
+superseding an edited version needs an explicit confirmation; a user answer is stored
+exactly as written and never truncated; a rejected or failed generation changes
+nothing; and every generation is optional.
+
+### 20.3 Application questions
+
+```
+Application ─► ApplicationQuestion ─► ApplicationQuestionAnswer     (current state: suggestion | answer)
+                      └──────────────► ApplicationQuestionGeneration  (every attempt, write-once)
+```
+
+- **Source-neutral.** `source`, `external_key`, `field_name`, `source_metadata` hold
+  whatever the creator knows; V0.9 questions are manual, V0.10's browser-discovered
+  fields will populate the same model (no website-specific names anywhere).
+- **Deterministic before AI.** Salary, dates, notice period, work authorization,
+  application language, contact details and (dates permitting) total experience are
+  answered from structured data with no AI call; missing data is `NEEDS_INPUT`, never a
+  guess. Everything else goes to the AI.
+- **Truth first, reusing V0.8.** The AI path builds on V0.8's generation context (same
+  fact ids, same confirmed-resume facts, same application facts) and validates with
+  V0.8's claim machinery (`ValidationRun`) plus answer-specific rules (options,
+  numbers, dates, yes/no, topic, length). Same `AIProvider` abstraction, same prompt
+  versioning and fingerprinting, same provenance conventions; no second framework.
+- **Provenance** on every attempt: prompt version and hash, provider and model, resume
+  version, context snapshot, input hash, question fingerprint, cited facts,
+  validation report, timestamp.
+
+### 20.4 Document versions: origin, Humanize and edits
+
+`generated_documents` gains `origin` (`ai` · `humanized` · `user_edited`),
+`base_document_id` and `prompt_hash`. **Humanize** runs the V0.8 pipeline over an
+already validated letter and produces a *new validated version*; it is not a validator
+bypass (same claim checks plus rewording rules; failure leaves the letter untouched).
+**Edits** are new immutable versions marked `user_authored`. The CV photo is a
+user-owned asset outside every generated schema.
+
+### 20.5 Migration, API, UI
+
+Migration `a9d4f2b7c1e3`, purely additive (four tables, six enum types, three columns
+and one check constraint on `generated_documents`; downgrades to the exact V0.8
+schema). API: `/applications/{id}/questions…`, `…/documents/cover-letter/humanize`,
+`…/documents/{id}/edit`, `…/cv-photo`. UI: *Application questions* section, section
+navigation, Humanize / Edit / Copy / Download / photo in *Documents*.
+
+### 20.6 Preparing V0.10 (not built)
+
+Browser automation will *populate* `ApplicationQuestion` (`source` = a neutral label,
+`external_key` / `field_name` / `source_metadata` from the form), reuse the existing
+suggestion → review → accept flow, fill only the user's reviewed final answers, and
+keep the user able to edit every field before anything is submitted.

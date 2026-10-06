@@ -12,9 +12,9 @@ Like the V0.5 documents, every part forbids unknown keys and is validated on
 every write and read of the JSONB column.
 """
 
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, Self
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, TypeAdapter, model_validator
 
 from app.schemas.document_ai import LetterRole
 from app.schemas.document_types import DocumentModel, LanguageKey
@@ -48,14 +48,27 @@ class CvHeader(DocumentModel):
     links: list[str] = Field(default_factory=list)
 
 
+#: Whose words a piece of text is. "ai" text always cites the facts it rests on;
+#: "user" text (V0.9: saved from the editor) is the user's own and cites nothing.
+TextOrigin = Literal["ai", "user"]
+
+
 class CvSummary(DocumentModel):
     text: str = Field(min_length=1)
     source_fact_ids: list[str] = Field(default_factory=list)
+    origin: TextOrigin = "ai"
 
 
 class CvBullet(DocumentModel):
     text: str = Field(min_length=1)
-    source_fact_ids: list[str] = Field(min_length=1)
+    source_fact_ids: list[str] = Field(default_factory=list)
+    origin: TextOrigin = "ai"
+
+    @model_validator(mode="after")
+    def _ai_text_cites_facts(self) -> Self:
+        if self.origin == "ai" and not self.source_fact_ids:
+            raise ValueError("a generated bullet cites at least one fact")
+        return self
 
 
 class CvExperience(DocumentModel):
@@ -153,6 +166,7 @@ class LetterParagraph(DocumentModel):
     text: str = Field(min_length=1)
     source_fact_ids: list[str] = Field(default_factory=list)
     job_fact_ids: list[str] = Field(default_factory=list)
+    origin: TextOrigin = "ai"
 
 
 class CoverLetterContent(DocumentModel):

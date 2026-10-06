@@ -32,12 +32,13 @@ location, the offending words), never the rejected document.
 """
 
 from collections.abc import Callable
+from typing import Protocol
 
 from app.schemas.document_ai import AICoverLetter, AITailoredCV
 from app.schemas.document_content import ValidationReport, Violation
 from app.services.documents import claims
 from app.services.documents.context import GenerationContext
-from app.services.documents.facts import Fact
+from app.services.documents.facts import Fact, FactCatalog
 
 #: A report lists at most this many violations (the first ones found).
 MAX_VIOLATIONS = 20
@@ -56,10 +57,29 @@ _CLAIM_MESSAGES = {
 }
 
 
+class ClaimContext(Protocol):
+    """What the claim checks need to know: the facts that may be cited, the job's
+    own names (a text may refer to them) and the language. A `GenerationContext`
+    is one; the V0.9 answer and Humanize validators build lighter ones."""
+
+    @property
+    def language(self) -> str: ...
+    @property
+    def catalog(self) -> FactCatalog: ...
+    @property
+    def job_fact_ids(self) -> frozenset[str]: ...
+    @property
+    def title_variants(self) -> tuple[str, ...]: ...
+    @property
+    def name_variants(self) -> tuple[str, ...]: ...
+    @property
+    def company_name(self) -> str: ...
+
+
 class _Run:
     """The state of validating one document."""
 
-    def __init__(self, context: GenerationContext) -> None:
+    def __init__(self, context: ClaimContext) -> None:
         self.context = context
         self.violations: list[Violation] = []
         self.units = 0
@@ -240,10 +260,8 @@ class _Run:
                     word,
                 )
 
-    def check_past_employment(
-        self, location: str, text: str, support: claims.Support
-    ) -> None:
-        """"I worked at <the company I am applying to>" is an invented
+    def check_past_employment(self, location: str, text: str, support: claims.Support) -> None:
+        """ "I worked at <the company I am applying to>" is an invented
         employer unless a cited fact says so."""
         company = self.context.company_name
         if not company.strip() or support.has_name(company):
@@ -266,6 +284,11 @@ class _Run:
                 f"({self.context.language}).",
                 "document",
             )
+
+
+#: The claim checker, for other generated content that must meet the same truth
+#: standard (V0.9: answers to application questions, humanized letters).
+ValidationRun = _Run
 
 
 def _belongs_to(entry_id: str) -> Callable[[Fact], bool]:

@@ -216,6 +216,11 @@ def _mask_variants(value: str | None) -> list[str]:
     return list(dict.fromkeys(variants))
 
 
+#: The forms in which a text may repeat a job's own title / company / place; shared
+#: with the V0.9 validators so there is one definition.
+mask_variants = _mask_variants
+
+
 # --- The candidate ------------------------------------------------------------------------------
 
 

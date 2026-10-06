@@ -66,6 +66,22 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return data as T;
 }
 
+/**
+ * An authenticated binary download (e.g. the CV photo). Returns null for a 404
+ * ("there is none"); any other failure is an ApiError.
+ */
+export async function fetchBlob(path: string): Promise<Blob | null> {
+  const headers = new Headers();
+  const token = getStoredToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(`${API_BASE_URL}${path}`, { headers });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new ApiError(response.status, "DOWNLOAD_FAILED", "Unable to load the file.", {});
+  }
+  return response.blob();
+}
+
 export const api = {
   get: <T>(path: string, options?: RequestOptions) =>
     request<T>(path, { ...options, method: "GET" }),

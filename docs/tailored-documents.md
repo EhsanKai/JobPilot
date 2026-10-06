@@ -359,12 +359,16 @@ automatic — only an explicit request calls the provider.
 
 ## 13. AI originals and user edits
 
-V0.8 deliberately has **no editor** and no PATCH for documents. A document's
-`content` is the AI's validated original and is write-once. When editing arrives
-it will live in its own column/version, clearly marked *edited by you*, next to
+V0.8 deliberately had **no editor** and no PATCH for documents. A document's
+`content` is the AI's validated original and is write-once. **V0.9 added editing the
+way this section anticipated**: an edit is saved as a *new version*, clearly marked
+*edited by you* (`origin: user_edited`, `validation_status: user_authored`), next to
 the original — the V0.2 principle that AI output and user edits stay
-distinguishable. (The facts a user wants changed belong in the resume review,
-and the next generation then picks them up.)
+distinguishable. The edited version is never changed, regeneration over an edited
+current version needs an explicit acknowledgement, and Humanize creates another
+version. See [`application-questions.md`](application-questions.md) §10–§11. (The facts
+a user wants changed in employers, titles, dates and skills still belong in the resume
+review, and the next generation then picks them up.)
 
 ## 14. Failure handling
 
@@ -491,7 +495,8 @@ Results at V0.8: backend **1748 passed, 1 skipped** (V0.7: 1579 passed, 1 skippe
 - The language check flags only clearly wrong German / English text.
 - Only German and English; letters are addressed generically (*Sehr geehrte
   Damen und Herren*) — no recipient is invented.
-- Documents are on-screen only: no PDF / DOCX export, no editor, no delete.
+- Documents are on-screen (V0.9 added text editing, copy and `.txt` download): no PDF /
+  DOCX export, no delete.
 - Facts come from the confirmed resume only; skills, languages and experience
   the user declared in their V0.1 profile but not in the resume are not used.
 - Generation is a single synchronous request (bounded by the AI timeout), not a
@@ -504,8 +509,8 @@ V0.8 does **not** include, and nothing in it accidentally implements:
 
 | Deferred to | Feature |
 | --- | --- |
-| later | editing generated documents (kept apart from the AI original), PDF / DOCX export, deleting versions |
-| V0.9 | AI answers to application questions |
+| later | PDF / DOCX export, deleting versions |
+| V0.9 ✅ | AI answers to application questions; editing generated documents as new versions; Humanize; the CV photo; copy / download as text |
 | V0.10 | browser automation, auto-fill |
 | V0.11 | review and submission |
 | V0.12 | the full application lifecycle and tracking |
