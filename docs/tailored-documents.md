@@ -470,6 +470,10 @@ as a stub provider (`backend/e2e/serve.py`; visible as provider `e2e-stub`).
 | Documents section, generate / regenerate, loading, failure, rejection, versions, viewing, salary blockers, language, polling | `frontend/__tests__/ApplicationDocuments.test.tsx`, `documentsLib.test.ts`, `ApplicationWorkspace.test.tsx` |
 | real Chromium flow | `frontend/e2e/v08-tailored-documents.e2e.ts` |
 
+Results at V0.8: backend **1748 passed, 1 skipped** (V0.7: 1579 passed, 1 skipped;
++167 document tests in the three files above, +2 migration tests); frontend
+**269 passed** (V0.7: 210); Playwright **5 passed** (4 earlier specs + V0.8).
+
 ## 20. Limitations
 
 - **Validation is lexical.** It catches invented employers, tools, numbers,
