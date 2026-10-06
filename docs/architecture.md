@@ -1,9 +1,11 @@
-# JobPilot Architecture — V0 to V0.5.0
+# JobPilot Architecture — V0 to V0.5.1
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. The V0.5.0 matching data foundation is
+to build on them without a rewrite. The V0.5.1 taxonomy & deterministic
+normalization foundation is summarized in §16 and documented in
+[`taxonomy.md`](taxonomy.md). The V0.5.0 matching data foundation is
 summarized in §15 and documented in full in
 [`candidate-job-intelligence.md`](candidate-job-intelligence.md). V0.4 is summarized in §14 and documented
 in full in [`job-intelligence.md`](job-intelligence.md). V0.3 is summarized
@@ -486,3 +488,28 @@ jobs ──< job_intelligence ────────────┘
   columns (`is_current`, `verified_at`); JSONB is validated by Pydantic
   documents on assignment.
 - **One create-only migration** (`a56b296b53a5`): no V0.4 table is altered.
+
+## 16. V0.5.1 — Generic taxonomy & deterministic normalization
+
+Full documentation: [`taxonomy.md`](taxonomy.md).
+
+- **One domain-neutral mechanism** (`app/services/taxonomy/model.py`):
+  categories, entries and aliases are data; lookup is exact alias matching
+  on V0.4's folded text. Ambiguity is data as well: aliases that also mean
+  something else (`CPA`, `GCP`, `R`), and vendor terms (`SAP`, `Oracle`).
+  These give AMBIGUOUS, never a guess. No profession, industry or product
+  appears in code.
+- **Vocabularies**: skills (84 entries, 27 categories, from food safety to
+  cloud), languages (ISO 639-1) and levels (CEFR, native, unknown),
+  education levels, job titles (explicit aliases only) and locations. The
+  location vocabulary extends V0.4's tables with regions, alpha-3 codes and
+  observed cities. V0.4's dedup keys are unchanged.
+- **One result shape**: MATCH (key, label, version, matched alias) /
+  UNKNOWN (input preserved) / AMBIGUOUS (candidates, no choice).
+- **Versioned**: `TAXONOMY_VERSION` (`taxonomy_v1`) is the
+  `taxonomy_version` V0.5.0 stores. Tests pin each vocabulary's fingerprint
+  to its version.
+- **Data-driven seed**: every entry is evidenced in the 503 real V0.4.1
+  postings (enforced by tests).
+- No migration, API, UI, extraction, matching or AI.
+
