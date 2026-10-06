@@ -58,7 +58,12 @@ def _clean_tables() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
-def _no_real_http(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_real_http(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only tests explicitly marked `live_network` (opt-in, see
+    # tests/test_live_sources.py) may reach real job boards.
+    if request.node.get_closest_marker("live_network"):
+        return
+
     def _blocked(*args: object, **kwargs: object) -> None:
         raise RuntimeError("Real HTTP requests are disabled in tests. Use FakeJobBoards.")
 

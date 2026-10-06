@@ -18,3 +18,6 @@ exclude = ["alembic"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = [
+    "live_network: contacts the real Greenhouse/Lever APIs; runs only with JOBPILOT_LIVE_SOURCES=1",
+]
