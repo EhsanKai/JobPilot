@@ -12,6 +12,7 @@ from app.models.discovery_run import DiscoveryRunStatus
 from app.models.job import SalaryPeriod
 from app.models.job_preferences import EmploymentTypeValue, RemotePreference
 from app.models.professional_profile import SeniorityLevel
+from app.schemas.application import ApplicationRefRead
 from app.schemas.matching import MatchSummaryRead
 
 _MAX_TERM_LENGTH = 100
@@ -352,6 +353,8 @@ class JobSummaryRead(BaseModel):
     saved_at: datetime | None
     #: Your match for this job (V0.6); null when none was calculated.
     match: MatchSummaryRead | None = None
+    #: Your application for this job (V0.7); null until you start one.
+    application: ApplicationRefRead | None = None
 
 
 class JobDetailRead(JobSummaryRead):

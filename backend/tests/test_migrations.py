@@ -5,6 +5,8 @@
     V0.4 merged data -> downgrade                    (merged jobs split back, nothing lost)
     V0.4.1 data -> upgrade -> downgrade -> upgrade   (V0.5.0 roundtrip, create-only)
     V0.5 data  -> upgrade -> downgrade -> upgrade    (V0.6 roundtrip, additive)
+    V0.6 data  -> upgrade -> downgrade -> upgrade    (V0.7 roundtrip, application workspace)
+    V0 data    -> upgrade head                       (V0 application gets its UserJob + context)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -15,6 +17,8 @@ when it is missing.
 import time
 import uuid
 from collections.abc import Generator
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +33,8 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from app.core.config import settings
 from app.db.base import Base
+from app.schemas.application_context import ApplicationContextDocument
+from app.services.applications.context import hash_document
 from tests.conftest import TEST_DATABASE_URL
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -37,6 +43,7 @@ V03 = "c3f9d2e4a8b1"
 V04 = "d4a7e3b9c2f1"  # also the V0.4.1 schema (V0.4.1 added no migration)
 V05 = "a56b296b53a5"
 V06 = "c7d2e9f4b1a6"
+V07 = "e8b3c1a5d7f2"
 
 USER_ID = uuid.UUID("00000000-0000-4000-8000-0000000000a1")
 GH_JOB = uuid.UUID("00000000-0000-4000-8000-0000000000b1")
@@ -767,3 +774,342 @@ def test_v05_data_survives_v06_upgrade_downgrade_upgrade(migration_db: Engine) -
     command.upgrade(config, "head")
     assert "job_match_explanations" in user_tables(migration_db)
     assert enum_values(migration_db)["job_requirement_kind"][-1] == "UNSPECIFIED"
+
+
+# --- V0.7: application workspace (evolves the V0 `applications` table) ------------------------
+
+V06_APPLICATION_STATUS = [
+    "DRAFT", "IN_PROGRESS", "SUBMITTED", "INTERVIEWING", "OFFER", "REJECTED", "WITHDRAWN",
+]
+V07_ENUMS = {
+    "application_status": [*V06_APPLICATION_STATUS, "PREPARING"],
+    "notice_period_unit": ["DAYS", "WEEKS", "MONTHS"],
+    "work_authorization": ["AUTHORIZED", "REQUIRES_SPONSORSHIP", "UNKNOWN"],
+}
+V07_CONSTRAINTS = {
+    "fk_applications_user_job": "FOREIGN KEY (user_job_id, user_id) "
+                                "REFERENCES user_jobs(id, user_id) ON DELETE CASCADE",
+    "uq_applications_user_job_id": "UNIQUE (user_job_id)",
+    "uq_user_jobs_id_user": "UNIQUE (id, user_id)",
+    "applications_resume_id_fkey": "FOREIGN KEY (resume_id) REFERENCES resumes(id) "
+                                   "ON DELETE SET NULL",
+    "applications_source_posting_id_fkey": "FOREIGN KEY (source_posting_id) "
+                                           "REFERENCES job_source_postings(id) ON DELETE SET NULL",
+    "application_context_snapshots_application_id_fkey": "FOREIGN KEY (application_id) "
+                                                         "REFERENCES applications(id) "
+                                                         "ON DELETE CASCADE",
+    "uq_application_context_snapshots_application_id": "UNIQUE (application_id)",
+}
+V07_CHECKS = {
+    "ck_applications_salary_expectation",
+    "ck_applications_notice_period_pair",
+    "ck_applications_notice_period_value",
+    "ck_applications_application_language",
+}
+V07_INDEXES = {
+    "applications": {
+        "applications_pkey", "uq_applications_user_job_id", "ix_applications_source_posting_id",
+        "ix_applications_resume_id", "ix_applications_user_id_updated_at",
+    },
+    "application_context_snapshots": {
+        "application_context_snapshots_pkey",
+        "uq_application_context_snapshots_application_id",
+    },
+}
+V07_NEW_APPLICATION_COLUMNS = (
+    "user_job_id", "source_posting_id", "resume_id", "mention_salary_in_letter",
+    "notice_period_value", "notice_period_unit", "work_authorization", "application_language",
+    "notes",
+)
+V07_ONLY_APPLICATION = uuid.UUID("00000000-0000-4000-8000-0000000000c2")
+
+
+def build_v06_database(engine: Engine, config: Config) -> None:
+    command.upgrade(config, V03)
+    seed_v03(engine)
+    command.upgrade(config, V04)
+    seed_v04_profile_data(engine)
+    command.upgrade(config, V05)
+    seed_v05_rows(engine)
+    command.upgrade(config, V06)
+    seed_v06_rows(engine)
+    # The V0 placeholder row (seed_v03) with the fields V0.7 keeps.
+    execute(
+        engine,
+        "UPDATE applications SET salary_expectation = 72000, salary_currency = 'EUR', "
+        "start_date = '2026-12-01' WHERE id = :id",
+        id=APPLICATION_ID,
+    )
+
+
+def assert_v07_schema(engine: Engine) -> None:
+    assert "application_context_snapshots" in user_tables(engine)
+    enums = enum_values(engine)
+    for name, values in V07_ENUMS.items():
+        assert enums[name] == values, name
+    constraints = {
+        r["conname"]: r["definition"]
+        for r in rows(
+            engine,
+            "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid IN ('applications'::regclass, 'user_jobs'::regclass, "
+            "'application_context_snapshots'::regclass)",
+        )
+    }
+    for name, definition in V07_CONSTRAINTS.items():
+        assert constraints.get(name) == definition, name
+    assert V07_CHECKS <= set(constraints)
+    for table, expected in V07_INDEXES.items():
+        actual = {
+            r["indexname"] for r in rows(engine, "SELECT indexname FROM pg_indexes "
+                                         "WHERE tablename = :t", t=table)
+        }
+        assert actual == expected, table
+    nullable = {
+        r["column_name"]: r["is_nullable"]
+        for r in rows(
+            engine,
+            "SELECT column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'applications'",
+        )
+    }
+    assert nullable["user_job_id"] == "NO"
+    assert {"available_from", *V07_NEW_APPLICATION_COLUMNS} <= set(nullable)
+    assert "start_date" not in nullable
+    # The V0 placeholder columns that V0.7 reuses are still there.
+    assert {"salary_expectation", "salary_currency", "user_id", "job_id", "status"} <= set(nullable)
+
+
+def assert_legacy_application_migrated(engine: Engine) -> None:
+    """The V0 placeholder row (seed_v03 + build_v06_database), as V0.7 leaves it."""
+    application = rows(engine, "SELECT * FROM applications WHERE id = :id", id=APPLICATION_ID)[0]
+    # What V0 stored is untouched (the status too: no legacy value is rewritten).
+    assert application["user_id"] == USER_ID and application["job_id"] == GH_JOB
+    assert application["status"] == "SUBMITTED"
+    assert application["salary_expectation"] == Decimal("72000.00")
+    assert application["salary_currency"] == "EUR"
+    assert application["available_from"] == date(2026, 12, 1)  # V0's start_date
+    # Attached to the user's existing UserJob for that job.
+    user_job = rows(
+        engine, "SELECT id FROM user_jobs WHERE user_id = :u AND job_id = :j", u=USER_ID, j=GH_JOB
+    )[0]["id"]
+    assert application["user_job_id"] == user_job
+    # Nothing is invented for the new fields.
+    for column in V07_NEW_APPLICATION_COLUMNS[1:]:
+        assert application[column] is None, column
+
+    snapshot = rows(
+        engine,
+        "SELECT * FROM application_context_snapshots WHERE application_id = :id",
+        id=APPLICATION_ID,
+    )[0]
+    document = ApplicationContextDocument.model_validate(snapshot["document"])
+    assert snapshot["schema_version"] == document.schema_version == "application_context_v1"
+    assert snapshot["content_hash"] == hash_document(snapshot["document"])
+    # Rebuilt from the job as it is now; the document says so.
+    assert document.origin == "migrated"
+    assert document.job.job_id == GH_JOB
+    assert (document.job.title, document.job.company_name) == (
+        "Senior SAP ABAP Developer", "Example GmbH",
+    )
+    assert (document.job.salary_min, document.job.salary_max) == (
+        Decimal("70000.00"), Decimal("90000.00"),
+    )
+    job = document.job
+    assert job.employment_type is not None and job.employment_type.value == "full_time"
+    assert job.work_model is not None and job.work_model.value == "hybrid"
+    assert job.seniority is not None and job.seniority.value == "senior"
+    source = document.source
+    assert (source.source, source.source_job_id, source.source_company_key) == (
+        "greenhouse", "4012345", "acme",
+    )
+    assert source.original_url == "https://job-boards.greenhouse.io/acme/jobs/4012345?utm_source=x"
+    assert source.canonical_url == "https://job-boards.greenhouse.io/acme/jobs/4012345"
+    assert source.application_url == source.canonical_url  # an ATS hosts its own form
+    assert source.was_preferred is True
+
+
+def test_v06_data_survives_v07_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v06_database(migration_db, config)
+
+    v06_tables = user_tables(migration_db)
+    assert "application_context_snapshots" not in v06_tables
+    data_before = data_fingerprints(migration_db, v06_tables)
+    schema_before = schema_fingerprint(migration_db, v06_tables)
+    enums_before = enum_values(migration_db)
+    assert data_before["applications"][0] == 1 and data_before["user_jobs"][0] == 2
+
+    # V0.6 -> V0.7: additive (plus the one rename).
+    command.upgrade(config, V07)
+    assert user_tables(migration_db) == v06_tables | {"application_context_snapshots"}
+    unchanged = v06_tables - {"applications"}
+    assert data_fingerprints(migration_db, unchanged) == {
+        t: v for t, v in data_before.items() if t in unchanged
+    }
+    assert_v07_schema(migration_db)
+    assert_legacy_application_migrated(migration_db)
+    enums = enum_values(migration_db)
+    assert {k: v for k, v in enums.items() if k not in V07_ENUMS} == {
+        k: v for k, v in enums_before.items() if k not in V07_ENUMS
+    }
+
+    # An application V0.7 itself created (for the other user job).
+    execute(
+        migration_db,
+        "INSERT INTO applications (id, user_id, job_id, user_job_id, status, notes, "
+        "application_language, notice_period_value, notice_period_unit, "
+        "mention_salary_in_letter, available_from, salary_expectation, salary_currency) "
+        "SELECT :id, :user, :job, uj.id, 'PREPARING', 'private note', 'de', 3, 'MONTHS', true, "
+        "'2027-01-01', 78000, 'EUR' FROM user_jobs uj "
+        "WHERE uj.user_id = :user AND uj.job_id = :job",
+        id=V07_ONLY_APPLICATION, user=USER_ID, job=LEVER_JOB,
+    )
+
+    # V0.7 -> V0.6: exactly the V0.6 schema again; V0.6 data and the rows
+    # (V0.7's included, as DRAFT) are kept.
+    command.downgrade(config, V06)
+    assert user_tables(migration_db) == v06_tables
+    assert schema_fingerprint(migration_db, v06_tables) == schema_before
+    assert enum_values(migration_db) == enums_before
+    assert data_fingerprints(migration_db, unchanged) == {
+        t: v for t, v in data_before.items() if t in unchanged
+    }
+    legacy = rows(
+        migration_db,
+        "SELECT user_id, job_id, status, salary_expectation, salary_currency, start_date "
+        "FROM applications WHERE id = :id",
+        id=APPLICATION_ID,
+    )
+    assert legacy == [{
+        "user_id": USER_ID, "job_id": GH_JOB, "status": "SUBMITTED",
+        "salary_expectation": Decimal("72000.00"), "salary_currency": "EUR",
+        "start_date": date(2026, 12, 1),
+    }]
+    survivor = rows(
+        migration_db,
+        "SELECT job_id, status, salary_expectation, start_date FROM applications WHERE id = :id",
+        id=V07_ONLY_APPLICATION,
+    )
+    assert survivor == [{
+        "job_id": LEVER_JOB, "status": "DRAFT", "salary_expectation": Decimal("78000.00"),
+        "start_date": date(2027, 1, 1),
+    }]
+
+    # V0.6 -> V0.7 again: both rows are attached and get a (migrated) context.
+    command.upgrade(config, "head")
+    assert_v07_schema(migration_db)
+    assert_legacy_application_migrated(migration_db)
+    assert rows(
+        migration_db, "SELECT count(*) AS n FROM application_context_snapshots"
+    ) == [{"n": 2}]
+    assert rows(
+        migration_db, "SELECT status FROM applications WHERE id = :id", id=V07_ONLY_APPLICATION
+    ) == [{"status": "DRAFT"}]
+    # Nothing was invented along the way.
+    assert data_fingerprints(migration_db, unchanged) == {
+        t: v for t, v in data_before.items() if t in unchanged
+    }
+
+
+def test_a_v0_application_without_a_user_job_gets_one(migration_db: Engine) -> None:
+    config = alembic_config()
+    command.upgrade(config, V0)
+    seed_user(migration_db)
+    execute(
+        migration_db,
+        """
+        INSERT INTO jobs (id, source, external_id, title, company, location, url, description,
+                          raw_data)
+        VALUES (:id, 'greenhouse', '42', 'Backend Engineer', 'Acme GmbH', 'Berlin',
+                'https://job-boards.greenhouse.io/acme/jobs/42', 'Build things.',
+                '{"id": 42}'::json)
+        """,
+        id=GH_JOB,
+    )
+    execute(
+        migration_db,
+        "INSERT INTO applications (id, user_id, job_id, status, salary_expectation, "
+        "salary_currency, start_date) VALUES (:id, :user, :job, 'DRAFT', 65000, 'EUR', "
+        "'2026-11-15')",
+        id=APPLICATION_ID, user=USER_ID, job=GH_JOB,
+    )
+
+    command.upgrade(config, "head")
+
+    # There was no user_jobs table at V0: the migration creates the UserJob the
+    # application hangs off, without inventing a discovery or a save.
+    user_job = rows(migration_db, "SELECT * FROM user_jobs")
+    assert len(user_job) == 1
+    assert (user_job[0]["user_id"], user_job[0]["job_id"]) == (USER_ID, GH_JOB)
+    assert user_job[0]["first_discovered_at"] is None
+    assert user_job[0]["last_discovered_at"] is None
+    assert user_job[0]["saved_at"] is None
+    application = rows(migration_db, "SELECT * FROM applications")[0]
+    assert application["user_job_id"] == user_job[0]["id"]
+    assert (application["status"], application["salary_expectation"]) == (
+        "DRAFT", Decimal("65000.00"),
+    )
+    assert application["available_from"] == date(2026, 11, 15)
+    document = rows(
+        migration_db, "SELECT document FROM application_context_snapshots"
+    )[0]["document"]
+    context = ApplicationContextDocument.model_validate(document)
+    assert context.origin == "migrated"
+    assert (context.job.title, context.job.company_name) == ("Backend Engineer", "Acme GmbH")
+    assert context.source.source == "greenhouse" and context.source.source_job_id == "42"
+
+
+@pytest.mark.parametrize(
+    ("setup", "message"),
+    [
+        pytest.param(
+            "INSERT INTO applications (id, user_id, job_id, status) "
+            "VALUES (gen_random_uuid(), :user, NULL, 'DRAFT')",
+            "no job_id",
+            id="application-without-a-job",
+        ),
+        pytest.param(
+            "INSERT INTO applications (id, user_id, job_id, status) "
+            "VALUES (gen_random_uuid(), :user, :job, 'DRAFT'), "
+            "(gen_random_uuid(), :user, :job, 'DRAFT')",
+            "one application per user and job",
+            id="two-applications-for-one-job",
+        ),
+        pytest.param(
+            "INSERT INTO applications (id, user_id, job_id, status, salary_expectation) "
+            "VALUES (gen_random_uuid(), :user, :job, 'DRAFT', -1)",
+            "negative",
+            id="negative-salary",
+        ),
+    ],
+)
+def test_v07_stops_on_rows_it_cannot_attach_and_changes_nothing(
+    migration_db: Engine, setup: str, message: str
+) -> None:
+    config = alembic_config()
+    command.upgrade(config, V0)
+    seed_user(migration_db)
+    execute(
+        migration_db,
+        "INSERT INTO jobs (id, source, external_id, title, company, url) "
+        "VALUES (:id, 'greenhouse', '42', 'Backend Engineer', 'Acme GmbH', "
+        "'https://job-boards.greenhouse.io/acme/jobs/42')",
+        id=GH_JOB,
+    )
+    command.upgrade(config, V06)
+    execute(migration_db, setup, user=USER_ID, job=GH_JOB)
+    tables = user_tables(migration_db)
+    data_before = data_fingerprints(migration_db, tables)
+    schema_before = schema_fingerprint(migration_db, tables)
+    enums_before = enum_values(migration_db)
+
+    with pytest.raises(RuntimeError, match=message):
+        command.upgrade(config, V07)
+
+    # Stopped before touching anything: no rows lost or merged, no schema change.
+    assert rows(migration_db, "SELECT version_num FROM alembic_version") == [{"version_num": V06}]
+    assert user_tables(migration_db) == tables
+    assert data_fingerprints(migration_db, tables) == data_before
+    assert schema_fingerprint(migration_db, tables) == schema_before
+    assert enum_values(migration_db) == enums_before

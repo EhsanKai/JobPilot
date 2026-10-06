@@ -1,4 +1,10 @@
-from app.models.application import Application, ApplicationStatus
+from app.models.application import (
+    Application,
+    ApplicationStatus,
+    NoticePeriodUnit,
+    WorkAuthorization,
+)
+from app.models.application_context_snapshot import ApplicationContextSnapshot
 from app.models.candidate_profile_version import (
     CandidateProfileVersion,
     CandidateProfileVersionReason,
@@ -77,6 +83,9 @@ __all__ = [
     "DiscoveryRunStatus",
     "Application",
     "ApplicationStatus",
+    "NoticePeriodUnit",
+    "WorkAuthorization",
+    "ApplicationContextSnapshot",
     "CandidateProfileVersion",
     "CandidateProfileVersionReason",
     "JobIntelligence",
