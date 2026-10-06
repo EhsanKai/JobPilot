@@ -109,12 +109,12 @@ may share a hash), and `UNIQUE (id, user_id)` as the target of
 | Section | Fields |
 | --- | --- |
 | `role` | `current_title`, `seniority_level`, `years_of_experience` (each `{value, origin, evidence_ref}`), `target_titles` (user only) |
-| `skills[]` | `name`, `skill_key` (NULL until taxonomy), `category`, `proficiency` (`unknown` unless stated), `years`, `last_used` (`YYYY`/`YYYY-MM`), `origin`, `evidence_ref` |
+| `skills[]` | `name`, `skill_key` (V0.5.1 taxonomy key; needs `metadata.taxonomy_version`), `category`, `proficiency` (`unknown` unless stated), `years`, `last_used` (`YYYY`/`YYYY-MM`), `origin`, `evidence_ref` |
 | `languages[]` | `language_key` (ISO 639-1), `level` (CEFR A1–C2, `native`, `unknown`), `origin`, `evidence_ref` |
 | `location_and_mobility` | `current_location` (sourced), `preferred_locations` (user only), `relocation`, `travel` |
 | `preferences` | `work_models`, `employment_types`, `minimum_salary`, `desired_salary`, `currency` (user only) |
 | `deal_breakers[]` | the V0.1 representation unchanged: `type`, `value`, `enabled` |
-| `credentials` | `education[]` (`degree`, `degree_level`, `field_of_study`, `institution`), `certifications[]` (`name`, `issuer`, `date`) |
+| `credentials` | `education[]` (`degree`, `degree_level` — a V0.5.1 education-level key, `field_of_study`, `institution`), `certifications[]` (`name`, `issuer`, `date`) |
 | `work_authorization` | `authorized_countries` |
 | `metadata` | `sections_provided`, `schema_version`, `taxonomy_version`, `sources` (origins) |
 
@@ -317,11 +317,12 @@ Everything below is **future work** — none of it exists in V0.5.0:
 - **Snapshot builder**: assembles `CandidateProfileDocument` from the V0.1
   tables and the confirmed Resume Profile (user wins on conflict), computes
   `content_hash`, and stores a version only when the content changed.
-- **Skill taxonomy and normalization**: fills `skill_key` /
-  `taxonomy_version`. A small deterministic title-synonym vocabulary may
+- **Taxonomy and normalization** — *implemented in V0.5.1*, see
+  [`taxonomy.md`](taxonomy.md): versioned skill, language, education,
+  title and location vocabularies with deterministic normalizers
+  (`TAXONOMY_VERSION` is the `taxonomy_version` stored here). Nothing
+  calls them yet. A small deterministic title-synonym vocabulary may
   follow later; no title synonym matching exists.
-- **Location vocabulary expansion** (V0.5.1): deterministic city / country /
-  remote normalization only — no geocoding or distances.
 - **Requirement extraction**: deterministic extraction into `job_facts` and
   `job_requirements`.
 - **Extraction review checkpoint** (V0.5.3): a quality gate on extraction

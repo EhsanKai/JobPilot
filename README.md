@@ -150,6 +150,14 @@ one create-only migration). Snapshot building, requirement extraction,
 scoring, matching APIs and UI are later V0.5 phases. See
 [`docs/candidate-job-intelligence.md`](docs/candidate-job-intelligence.md).
 
+V0.5.1 adds the **taxonomy & deterministic normalization foundation**. It
+contains versioned, domain-neutral vocabularies for skills, languages
+(CEFR levels), education levels, job titles and locations. Each has a
+conservative normalizer that returns MATCH, UNKNOWN or AMBIGUOUS, never a
+guess. The seed comes from the 503 real postings. There is still nothing
+user-facing, and no extraction, matching or AI. See
+[`docs/taxonomy.md`](docs/taxonomy.md).
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -409,7 +417,7 @@ V0.1   User Profile & Job Preference Intelligence   ✅
 V0.2   Resume Intelligence         ✅
 V0.3   Job Discovery               ✅
 V0.4   Job Intelligence & Cross-Source Normalization   ✅
-V0.5   AI Matching                 (in progress: V0.5.0 data model ✅)
+V0.5   AI Matching                 (in progress: V0.5.0 data model ✅, V0.5.1 taxonomy ✅)
 V0.6   Job Dashboard / MVP
 V0.7   Application Workspace
 V0.8   Tailored CV + Anschreiben
