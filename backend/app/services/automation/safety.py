@@ -365,7 +365,8 @@ _SAFE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_/]{3,40}$")
 @dataclass(frozen=True)
 class Confirmation:
     confirmed: bool
-    #: The recognized confirmation phrase, as the page wrote it (bounded) -- never more.
+    #: The recognized confirmation phrase (normalized: lower case, no accents; bounded) --
+    #: never more of the page.
     summary: str | None = None
     reference: str | None = None
     #: Which evidence: TEXT, URL, MARKER.

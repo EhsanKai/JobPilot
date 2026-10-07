@@ -72,9 +72,9 @@ _NOT_HASHED = frozenset({"field_id", "authorization_id", "document_label", "auth
 
 _WORKING = (AutomationStatus.RUNNING, AutomationStatus.COMPLETED)
 _PERSONAL = re.compile(
-    r"\b(first|last|given|family|full|sur|middle)? ?name\b|e-?mail|phone|telefon|mobile|handy|"
-    r"address|adresse|street|strasse|city|stadt|ort\b|postal|zip|plz|postleitzahl|country|land\b|"
-    r"linkedin|github|website|portfolio|vorname|nachname|geburtsdatum|date of birth"
+    r"\b((first|last|given|family|full|sur|middle)? ?name|e-?mail|phone|telefon|mobile|handy|"
+    r"address|adresse|street|strasse|city|stadt|ort|postal|zip|plz|postleitzahl|country|land|"
+    r"linkedin|github|website|portfolio|vorname|nachname|geburtsdatum|date of birth)\b"
 )
 
 BLOCKER_MESSAGES: dict[str, str] = {

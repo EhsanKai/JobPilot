@@ -1,9 +1,13 @@
-# JobPilot Architecture — V0 to V0.10
+# JobPilot Architecture — V0 to V0.11
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.10 Browser Automation (the browser
+to build on them without a rewrite. V0.11 Review & Submit (the first version that may
+submit an application — only through a separate, explicitly authorized capability) is
+summarized in §22 and documented in full in
+[`browser-automation.md` §24 Submission Safety Model](browser-automation.md#24-v011-review--submit-the-submission-safety-model).
+V0.10 Browser Automation (the browser
 assistant) is summarized in §21 and documented in full in
 [`browser-automation.md`](browser-automation.md). V0.9 Application Question AI + Human
 Control is summarized in §20 and documented in full in
@@ -832,7 +836,8 @@ Application ─► AutomationSession ─► BrowserSession ─► BrowserPage   
   it fills anything.
 - **No submission, by construction.** The browser interface (`BrowserPage`) can read, type,
   choose, check and attach — it has no click or key press, so no code on top of it can press
-  *Submit*. Final actions (English and German) are recognized, never pressed, and the user is
+  *Submit* (V0.11 adds submission as a separate, permit-gated capability — §22 — and leaves
+  this interface unchanged). Final actions (English and German) are recognized, never pressed, and the user is
   told to submit manually. `SUBMIT_ACTIONS_ALLOWED = False`; tests run the full flow against
   a page whose submit button counts every click.
 - **No Playwright in the domain.** `BrowserDriver` / `BrowserSession` / `BrowserPage` and plain
@@ -852,4 +857,56 @@ Application ─► AutomationSession ─► BrowserSession ─► BrowserPage   
 
 Migration `b4e8c2d6a1f9`, purely additive (three tables, three enum types). API:
 `/applications/{id}/automation/…`. UI: the *Browser assistant* section of the workspace.
+
+## 22. V0.11 — Review & Submit
+
+Full documentation: [`browser-automation.md` §24](browser-automation.md#24-v011-review--submit-the-submission-safety-model).
+
+> **AI prepares the application; the user reviews it and authorizes it; only then does
+> JobPilot perform one narrowly scoped submission action.**
+
+```
+V0.10   Discover → Map → Review → Approve → Fill → Verify → Human takeover → STOP
+V0.11   … → Human takeover → Final Review → Consent Review → Explicit Submission Authorization
+          → Dedicated Submit Capability → Submit Exactly Once → Verify Submission Result
+```
+
+- **Submission is a separate capability, not a looser fill.** `SUBMIT_ACTIONS_ALLOWED` is
+  still `False` and `BrowserPage` still has no click, key press or submit. Pressing the final
+  button lives on a second, narrow interface (`FinalSubmissionChannel`:
+  `find_final_controls` · `page_marker` · `submit_final_application(permit)` · `read_outcome`)
+  whose only acting method takes a single-use `SubmitPermit` — issued only by
+  `services/automation/submission.py`, after a persisted authorization was consumed.
+- **What is submitted is what was reviewed.** `review.compute` derives the *submission
+  state* from the live page and the session's records — every field's final value, source
+  and verification, every document's id / version / content hash, every consent's exact
+  text, state and authorization, the destination and the one final button — and its
+  SHA-256 over canonical JSON (no timestamps or row ids). A `FinalReview` stores that
+  snapshot immutably; the hash is recomputed at authorization and again under the write
+  gate immediately before the press. A navigation or reload is detected separately by a
+  page-instance marker.
+- **Authorization is explicit, scoped and one-shot.** `SubmissionAuthorization` is bound
+  to the user, application, session, review, hash and host; it expires; it is consumed in
+  the same transaction that creates the `SubmissionAttempt` (session and authorization rows
+  locked). The database allows one attempt per authorization and one running attempt per
+  application.
+- **Consents are individual.** Each legal confirmation needs its own
+  `ConsentAuthorization` for its exact text (SHA-256); a changed text authorizes nothing.
+  Only then may JobPilot tick that one box; the fill assistant still never does.
+- **Every relevant change invalidates.** Take-control, pause, stop, resume, fill, mapping,
+  document and consent decisions, navigation/reload and another website invalidate the
+  review and the authorization (`invalidation.py`, guarded UPDATEs); changes made elsewhere
+  are caught by the hash.
+- **No automatic retry, ever.** `submit_triggered_at` is committed before the press; after
+  it, anything uncertain is `SUBMISSION_UNKNOWN`, and the application accepts no new
+  authorization until the user records what they found. `SUCCESS` needs evidence on the page
+  (a confirmation phrase, URL or marker that was not there before), never just a click.
+- **Audit, not tracking.** `SubmissionAttempt` is append-only and holds safe metadata only.
+  A confirmed submission sets the application's (existing) `submitted` status — nothing of
+  V0.12's tracking is built.
+
+Migration `c5f2a8e1d9b3`, purely additive (four tables, three enum types, one nullable
+column). API: `…/automation/{sid}/final-review`, `…/consents/{fid}`,
+`…/submission-authorization`, `…/submit`, `…/automation/submissions`. UI: *Final review*
+inside the Browser assistant section.
 

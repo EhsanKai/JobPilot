@@ -12,8 +12,8 @@ This repository currently implements **V0 — Foundation**,
 foundations (data model and taxonomy), **V0.6 — Job Matching &
 Explainability**, **V0.7 — Application Workspace**, **V0.8 — Tailored CV &
 Anschreiben Generation**, **V0.9 — Application Question AI + Human Control at
-Every Stage** and **V0.10 — Browser Automation & Human-Controlled Application
-Filling**.
+Every Stage**, **V0.10 — Browser Automation & Human-Controlled Application
+Filling** and **V0.11 — Review & Submit**.
 
 ## 1. What JobPilot is
 
@@ -21,7 +21,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.10)
+## 2. Current scope (V0 – V0.11)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -271,6 +271,28 @@ without a display. Not in V0.10: submission, review before submission (V0.11),
 CAPTCHA or login handling beyond handing the browser back, link following, custom
 (ARIA) controls.
 
+V0.11 adds **Review & Submit**: *AI prepares the application; you review it and
+authorize it; only then does JobPilot press the employer's final button — once.*
+
+- **Final review.** Exactly what would be sent, read from the live page: destination,
+  every value with its source ("Your answer", "From your application data", "AI-generated
+  → accepted by you"), the exact CV / Anschreiben versions, every consent, and everything
+  still unresolved. Confirming it stores an immutable snapshot and its SHA-256.
+- **Consents, one by one.** Each legal consent is authorized for its exact text; only then
+  may JobPilot tick that one box. A changed text needs a new authorization.
+- **Explicit authorization.** A checkbox and **Authorize & Submit** — scoped to that review,
+  its hash, the session and the website; it expires and works once. Any change (an edit,
+  a reload, taking control, another document) invalidates it.
+- **Exactly once, never retried.** The server re-checks the live page under a lock and
+  presses the one final button through a separate, single-use capability (the fill
+  assistant still cannot press anything). Success needs a confirmation on the page; anything
+  uncertain is *SUBMISSION_UNKNOWN* — JobPilot will not submit again until you have checked.
+
+See the Submission Safety Model in
+[`docs/browser-automation.md` §24](docs/browser-automation.md#24-v011-review--submit-the-submission-safety-model).
+Not in V0.11: application tracking, follow-ups, interviews (V0.12), multi-step forms,
+retries of any kind, bulk submission.
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -483,7 +505,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.10)
+## 12. API endpoints (V0 – V0.11)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -586,6 +608,13 @@ POST   /applications/{id}/automation/{sid}/suggest          AI suggestions for u
 POST   /applications/{id}/automation/{sid}/confirm-domain   this website is part of my application
 POST   /applications/{id}/automation/{sid}/fields/{fid}/mapping    confirm / change / leave unmapped / add a question
 PUT    /applications/{id}/automation/{sid}/fields/{fid}/document   "Use this file" (DELETE: don't attach)
+GET    /applications/{id}/automation/{sid}/final-review     what would be submitted now (V0.11)
+POST   /applications/{id}/automation/{sid}/final-review     confirm the final review you saw
+POST   /applications/{id}/automation/{sid}/consents/{fid}   give one consent, for its exact text (DELETE: withdraw)
+POST   /applications/{id}/automation/{sid}/submission-authorization   your explicit authorization
+POST   /applications/{id}/automation/{sid}/submit           submit under an authorization, once
+GET    /applications/{id}/automation/submissions            submission attempts (the audit trail)
+POST   /applications/{id}/automation/submissions/{aid}/verification   after an unknown result
 ```
 
 `GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
@@ -613,7 +642,7 @@ V0.7   Application Workspace        ✅
 V0.8   Tailored CV + Anschreiben    ✅
 V0.9   Application Question AI + Human Control   ✅
 V0.10  Browser Automation & Human-Controlled Filling   ✅
-V0.11  Review & Submit
+V0.11  Review & Submit             ✅
 V0.12  Application Tracking
 V0.13  Multi-source Expansion
 V0.14  Smart Apply Strategy
