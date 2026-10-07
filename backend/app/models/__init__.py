@@ -16,6 +16,12 @@ from app.models.application_question import (
     GenerationOutcome,
     QuestionType,
 )
+from app.models.application_status_history import (
+    ApplicationStatusHistory,
+    StatusChangeActor,
+    StatusChangeSource,
+    StatusHistoryEntryType,
+)
 from app.models.automation import (
     ACTIVE_STATUSES,
     AutomationEvent,
@@ -118,6 +124,10 @@ __all__ = [
     "DiscoveryRunStatus",
     "Application",
     "ApplicationStatus",
+    "ApplicationStatusHistory",
+    "StatusChangeActor",
+    "StatusChangeSource",
+    "StatusHistoryEntryType",
     "NoticePeriodUnit",
     "WorkAuthorization",
     "ApplicationContextSnapshot",

@@ -48,7 +48,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import AppError, NotFoundError
 from app.core.logging import get_logger
-from app.models.application import Application, ApplicationStatus
+from app.models.application import Application
 from app.models.automation import (
     AutomationField,
     AutomationSession,
@@ -64,6 +64,7 @@ from app.models.submission import (
     SubmissionResult,
 )
 from app.models.user import User
+from app.services.applications import tracking
 from app.services.applications.service import get_owned_application
 from app.services.automation import controller, filler, invalidation, messages, safety
 from app.services.automation import review as review_state
@@ -904,9 +905,8 @@ def _observe(
                     reference=found.reference,
                     summary=found.summary,
                 )
-                fresh = db.get(Application, application.id, populate_existing=True)
-                if fresh is not None:
-                    fresh.status = ApplicationStatus.SUBMITTED
+                # Tracking (V0.12): a confirmed submission means APPLIED.
+                tracking.record_submission_confirmed(db, recorder.attempt_id)
                 controller.record(
                     db, session, EventType.SUBMISSION_CONFIRMED, evidence=found.evidence
                 )
@@ -969,7 +969,8 @@ def verify_attempt(
     attempt.user_verified_outcome = outcome
     attempt.user_verified_at = _now()
     if outcome == "SUBMITTED":
-        application.status = ApplicationStatus.SUBMITTED
+        db.flush()
+        tracking.record_user_verified_submission(db, attempt)
     session = db.get(AutomationSession, attempt.session_id)
     if session is not None:
         controller.record(db, session, EventType.SUBMISSION_VERIFIED_BY_USER, outcome=outcome)

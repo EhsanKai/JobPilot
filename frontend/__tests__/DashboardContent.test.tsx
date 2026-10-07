@@ -8,6 +8,7 @@ import { makeResume } from "./fixtures/resumeProfile";
 const getProfileCompletenessMock = vi.fn();
 const getCurrentResumeMock = vi.fn();
 const getPreferencesMock = vi.fn();
+const getStatusCountsMock = vi.fn();
 
 vi.mock("@/lib/api/completeness", () => ({
   getProfileCompleteness: () => getProfileCompletenessMock(),
@@ -18,6 +19,9 @@ vi.mock("@/lib/api/resumes", () => ({
 vi.mock("@/lib/api/preferences", () => ({
   getPreferences: () => getPreferencesMock(),
 }));
+vi.mock("@/lib/api/tracking", () => ({
+  getStatusCounts: () => getStatusCountsMock(),
+}));
 
 describe("DashboardContent", () => {
   beforeEach(() => {
@@ -27,6 +31,7 @@ describe("DashboardContent", () => {
       message: "Keep going -- add a few more details to strengthen your profile.",
     });
     getCurrentResumeMock.mockResolvedValue(null);
+    getStatusCountsMock.mockResolvedValue({ counts: {}, total: 0 });
     getPreferencesMock.mockResolvedValue({
       id: "pref-1",
       user_id: "user-1",
@@ -57,7 +62,8 @@ describe("DashboardContent", () => {
     expect(screen.queryByText("Coming in V0.3")).not.toBeInTheDocument();
     expect(screen.getByText("AI Matching")).toBeInTheDocument();
     expect(screen.getByText("Application Assistant")).toBeInTheDocument();
-    expect(screen.getByText("Application Tracking")).toBeInTheDocument();
+    // Application Tracking shipped in V0.12: it is a real card now, not an upcoming feature.
+    expect(screen.queryByText("Application Tracking")).not.toBeInTheDocument();
     await screen.findByText("42%");
   });
 

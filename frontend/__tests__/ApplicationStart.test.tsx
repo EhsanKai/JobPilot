@@ -35,7 +35,7 @@ vi.mock("@/lib/api/match", () => ({
   explainMatch: vi.fn(),
 }));
 
-const REF = { id: "app-1", status: "preparing" } as const;
+const REF = { id: "app-1", status: "PREPARING" } as const;
 
 describe("ApplicationCard", () => {
   beforeEach(() => {

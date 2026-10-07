@@ -10,15 +10,15 @@ import type {
 } from "@/types/application";
 
 export const APPLICATION_STATUS_LABELS: Record<ApplicationStatus, string> = {
-  preparing: "In preparation",
-  // V0 placeholders for the later lifecycle (V0.12); V0.7 never sets them.
-  draft: "Draft",
-  in_progress: "In progress",
-  submitted: "Submitted",
-  interviewing: "Interviewing",
-  offer: "Offer",
-  rejected: "Rejected",
-  withdrawn: "Withdrawn",
+  SAVED: "Saved",
+  PREPARING: "In preparation",
+  APPLIED: "Applied",
+  FOLLOW_UP: "Follow-up",
+  INTERVIEW: "Interview",
+  OFFER: "Offer",
+  REJECTED: "Rejected",
+  WITHDRAWN: "Withdrawn",
+  NO_RESPONSE: "No response",
 };
 
 export const APPLICATION_LANGUAGE_OPTIONS: { value: ApplicationLanguage; label: string }[] = [

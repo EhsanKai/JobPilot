@@ -2,9 +2,14 @@ import type {
   Application,
   ApplicationContext,
   ApplicationResume,
+  ApplicationStatus,
+  ApplicationSummary,
+  ApplicationTracking,
   PreparationItem,
   PreparationKey,
   PreparationProgress,
+  SubmissionSummary,
+  TimelineEntry,
 } from "@/types/application";
 import type { Resume } from "@/types/resume";
 
@@ -116,7 +121,7 @@ export function makeResume(overrides: Partial<Resume> = {}): Resume {
 export function makeApplication(overrides: Partial<Application> = {}): Application {
   return {
     id: "app-1",
-    status: "preparing",
+    status: "PREPARING",
     job_id: "job-1",
     user_job_id: "user-job-1",
     created_at: "2026-10-02T09:00:00Z",
@@ -134,6 +139,91 @@ export function makeApplication(overrides: Partial<Application> = {}): Applicati
     resume: makeApplicationResume(),
     match: null,
     progress: makeProgress(),
+    tracking: makeTracking(),
+    ...overrides,
+  };
+}
+
+/** What the server says is allowed from each status (the lifecycle of V0.12). */
+export const ALLOWED_NEXT: Record<ApplicationStatus, ApplicationStatus[]> = {
+  SAVED: ["PREPARING", "WITHDRAWN"],
+  PREPARING: ["APPLIED", "WITHDRAWN"],
+  APPLIED: ["FOLLOW_UP", "INTERVIEW", "OFFER", "REJECTED", "WITHDRAWN", "NO_RESPONSE"],
+  FOLLOW_UP: ["INTERVIEW", "OFFER", "REJECTED", "WITHDRAWN", "NO_RESPONSE"],
+  INTERVIEW: ["OFFER", "REJECTED", "WITHDRAWN", "NO_RESPONSE"],
+  OFFER: ["WITHDRAWN", "REJECTED"],
+  REJECTED: [],
+  WITHDRAWN: [],
+  NO_RESPONSE: [],
+};
+
+const APPLIED_STATUSES: ApplicationStatus[] = ["APPLIED", "FOLLOW_UP", "INTERVIEW", "OFFER"];
+
+export function makeSubmissionSummary(
+  overrides: Partial<SubmissionSummary> = {}
+): SubmissionSummary {
+  return {
+    attempt_id: "attempt-1",
+    result: "SUCCESS",
+    started_at: "2026-10-07T09:00:00Z",
+    finished_at: "2026-10-07T09:00:09Z",
+    confirmation_reference: "ABC-123",
+    user_verified_outcome: null,
+    needs_verification: false,
+    ...overrides,
+  };
+}
+
+/** The tracking of an application in `status`, consistent with the lifecycle. */
+export function makeTracking(
+  overrides: Partial<ApplicationTracking> & { status?: ApplicationStatus } = {}
+): ApplicationTracking {
+  const status = overrides.status ?? "PREPARING";
+  return {
+    status,
+    applied_at: APPLIED_STATUSES.includes(status) ? "2026-10-07T09:00:09Z" : null,
+    last_status_change_at: "2026-10-07T09:00:09Z",
+    follow_up_at: null,
+    allowed_next_statuses: ALLOWED_NEXT[status],
+    submission: null,
+    ...overrides,
+  };
+}
+
+/** A row of "My Applications". */
+export function makeSummary(overrides: Partial<ApplicationSummary> = {}): ApplicationSummary {
+  return {
+    id: "app-1",
+    status: "PREPARING",
+    job_id: "job-1",
+    title: "Senior Backend Engineer (Python)",
+    company_name: "Acme GmbH",
+    location: "Berlin, Germany",
+    source: "greenhouse",
+    original_url: "https://job-boards.greenhouse.io/acme/jobs/4012345?utm_source=x",
+    created_at: "2026-10-02T09:00:00Z",
+    updated_at: "2026-10-07T09:00:09Z",
+    progress: makeProgress(),
+    applied_at: null,
+    last_status_change_at: "2026-10-07T09:00:09Z",
+    follow_up_at: null,
+    submission: null,
+    ...overrides,
+  };
+}
+
+export function makeTimelineEntry(overrides: Partial<TimelineEntry> = {}): TimelineEntry {
+  return {
+    kind: "STATUS_CHANGE",
+    id: "entry-1",
+    occurred_at: "2026-10-07T09:00:09Z",
+    previous_status: "PREPARING",
+    status: "APPLIED",
+    source: "USER",
+    actor: "USER",
+    note: null,
+    submission_attempt_id: null,
+    submission: null,
     ...overrides,
   };
 }

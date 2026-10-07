@@ -4,20 +4,23 @@ import type { SalaryPeriod, SeniorityLevel } from "@/types/jobs";
 import type { MatchSummary } from "@/types/match";
 import type { EmploymentType, RemotePreference } from "@/types/preferences";
 import type { ResumeStatus } from "@/types/resume";
+import type { SubmissionResult } from "@/types/submission";
 
 /**
- * V0.7 only ever creates "preparing". The other values are placeholders for
- * the V0.12 lifecycle, kept so legacy rows still render.
+ * Where an application is in its tracking lifecycle (V0.12). Mirrors the backend
+ * `ApplicationStatus`; which change is allowed from which status is decided by the server
+ * (`tracking.allowed_next_statuses`).
  */
 export type ApplicationStatus =
-  | "preparing"
-  | "draft"
-  | "in_progress"
-  | "submitted"
-  | "interviewing"
-  | "offer"
-  | "rejected"
-  | "withdrawn";
+  | "SAVED"
+  | "PREPARING"
+  | "APPLIED"
+  | "FOLLOW_UP"
+  | "INTERVIEW"
+  | "OFFER"
+  | "REJECTED"
+  | "WITHDRAWN"
+  | "NO_RESPONSE";
 
 export type NoticePeriodUnit = "days" | "weeks" | "months";
 export type WorkAuthorization = "authorized" | "requires_sponsorship" | "unknown";
@@ -149,6 +152,32 @@ export interface Application {
   /** Your current match for the job; never recalculated by the workspace. */
   match: MatchSummary | null;
   progress: PreparationProgress;
+  /** Where the application is in its tracking lifecycle (V0.12). */
+  tracking: ApplicationTracking;
+}
+
+/** The latest V0.11 submission attempt, as tracking shows it. */
+export interface SubmissionSummary {
+  attempt_id: string;
+  result: SubmissionResult | null;
+  started_at: string;
+  finished_at: string | null;
+  confirmation_reference: string | null;
+  /** After an unknown result: what the user found when they checked. */
+  user_verified_outcome: "SUBMITTED" | "NOT_SUBMITTED" | null;
+  /** The result is uncertain and the user has not checked yet. */
+  needs_verification: boolean;
+}
+
+export interface ApplicationTracking {
+  status: ApplicationStatus;
+  applied_at: string | null;
+  last_status_change_at: string;
+  /** A date the user set for themselves: nothing is sent when it passes. */
+  follow_up_at: string | null;
+  /** What an ordinary status change may go to from here (the server decides). */
+  allowed_next_statuses: ApplicationStatus[];
+  submission: SubmissionSummary | null;
 }
 
 export interface ApplicationSummary {
@@ -163,6 +192,10 @@ export interface ApplicationSummary {
   created_at: string;
   updated_at: string;
   progress: PreparationProgress;
+  applied_at: string | null;
+  last_status_change_at: string;
+  follow_up_at: string | null;
+  submission: SubmissionSummary | null;
 }
 
 export interface ApplicationList {
@@ -194,4 +227,82 @@ export interface ApplicationStartRequest extends ApplicationPreparationInput {
 /** Body of `PATCH /applications/{id}`: omitted = unchanged, null = cleared. */
 export interface ApplicationUpdateRequest extends ApplicationPreparationInput {
   resume_id?: string;
+}
+
+// --- Tracking (V0.12) ------------------------------------------------------------------------
+
+export type ApplicationSort = "updated" | "applied";
+
+/** Filters and sorting of `GET /applications` ("My Applications"). */
+export interface ApplicationListQuery {
+  page?: number;
+  pageSize?: number;
+  statuses?: ApplicationStatus[];
+  company?: string;
+  source?: string;
+  /** YYYY-MM-DD, inclusive. */
+  appliedFrom?: string;
+  appliedTo?: string;
+  sort?: ApplicationSort;
+}
+
+/** Body of `PATCH /applications/{id}/status`. The server decides everything else. */
+export interface StatusChangeRequest {
+  status: ApplicationStatus;
+  note?: string;
+  /** Explicitly fix a wrongly recorded status: any other status, a note is required. */
+  correction?: boolean;
+  /** ISO date-time. Only while waiting (applied, follow-up, interview). */
+  follow_up_at?: string;
+}
+
+/** Body of `PATCH /applications/{id}/tracking`: omitted = unchanged, null = cleared. */
+export interface TrackingUpdateRequest {
+  follow_up_at?: string | null;
+  note?: string;
+}
+
+export interface StatusChangeResponse {
+  /** False when the request changed nothing. */
+  changed: boolean;
+  tracking: ApplicationTracking;
+}
+
+export type TimelineKind = "STATUS_CHANGE" | "CORRECTION" | "NOTE" | "SUBMISSION";
+export type StatusChangeSource = "SYSTEM" | "USER" | "SUBMISSION";
+export type StatusChangeActor = "USER" | "SYSTEM";
+
+export interface TimelineSubmission {
+  attempt_id: string;
+  result: SubmissionResult | null;
+  destination_domain: string;
+  confirmation_reference: string | null;
+  confirmation_summary: string | null;
+  user_verified_outcome: "SUBMITTED" | "NOT_SUBMITTED" | null;
+  user_verified_at: string | null;
+  failure_code: string | null;
+}
+
+export interface TimelineEntry {
+  kind: TimelineKind;
+  id: string;
+  occurred_at: string;
+  previous_status: ApplicationStatus | null;
+  status: ApplicationStatus | null;
+  source: StatusChangeSource | null;
+  actor: StatusChangeActor | null;
+  /** The user's own words, exactly as written. */
+  note: string | null;
+  submission_attempt_id: string | null;
+  submission: TimelineSubmission | null;
+}
+
+export interface Timeline {
+  /** Newest first. */
+  items: TimelineEntry[];
+}
+
+export interface StatusCounts {
+  counts: Record<ApplicationStatus, number>;
+  total: number;
 }

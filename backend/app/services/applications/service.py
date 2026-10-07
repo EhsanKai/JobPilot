@@ -20,7 +20,8 @@ changed.
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +33,7 @@ from app.models.application_context_snapshot import ApplicationContextSnapshot
 from app.models.job import Job
 from app.models.job_source_posting import JobSourcePosting
 from app.models.resume import Resume, ResumeStatus
+from app.models.submission import SubmissionAttempt
 from app.models.user import User
 from app.schemas.application import (
     ApplicationContextRead,
@@ -44,7 +46,9 @@ from app.schemas.application import (
     ApplicationUpdate,
     NoticePeriod,
 )
+from app.schemas.application_tracking import ApplicationListFilters
 from app.services import resume_service
+from app.services.applications import tracking
 from app.services.applications.context import build_context, content_hash
 from app.services.applications.progress import preparation_progress
 from app.services.job_discovery.deduplication.merger import order_postings
@@ -196,6 +200,7 @@ def start_application(
         else _default_resume(db, user)
     )
 
+    now = datetime.now(UTC)
     application = Application(
         user_id=user.id,
         user_job_id=user_job.id,
@@ -207,7 +212,9 @@ def start_application(
     _apply_preparation(application, request, request.model_fields_set)
     _validate_preparation(application)
 
-    document = build_context(job, posting, captured_at=datetime.now(UTC))
+    # The tracking timeline starts with the application (V0.12).
+    tracking.start_history(application, user_job, now)
+    document = build_context(job, posting, captured_at=now)
     application.context = ApplicationContextSnapshot(
         schema_version=document.schema_version,
         content_hash=content_hash(document),
@@ -290,6 +297,7 @@ def to_read(db: Session, user: User, application: Application) -> ApplicationRea
     snapshot = _snapshot(application)
     job = application.user_job.job
     posting = application.source_posting
+    attempt = tracking.latest_attempts(db, user.id, [application.id]).get(application.id)
     return ApplicationRead(
         id=application.id,
         status=application.status,
@@ -312,10 +320,13 @@ def to_read(db: Session, user: User, application: Application) -> ApplicationRea
         resume=_resume_read(application.resume),
         match=match_status.summaries(db, user, [job]).get(job.id),
         progress=preparation_progress(application),
+        tracking=tracking.tracking_read(application, attempt),
     )
 
 
-def _to_summary(application: Application) -> ApplicationSummaryRead:
+def _to_summary(
+    application: Application, attempt: SubmissionAttempt | None
+) -> ApplicationSummaryRead:
     document = _snapshot(application).read_document()
     return ApplicationSummaryRead(
         id=application.id,
@@ -329,24 +340,79 @@ def _to_summary(application: Application) -> ApplicationSummaryRead:
         created_at=application.created_at,
         updated_at=application.updated_at,
         progress=preparation_progress(application),
+        applied_at=application.applied_at,
+        last_status_change_at=application.last_status_change_at,
+        follow_up_at=application.follow_up_at,
+        submission=tracking.submission_summary(attempt),
     )
 
 
+def _like_pattern(text: str) -> str:
+    """A case-insensitive "contains" pattern, with the user's own `%` / `_` taken literally."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def list_applications(
-    db: Session, user: User, *, page: int, page_size: int
+    db: Session,
+    user: User,
+    *,
+    page: int,
+    page_size: int,
+    filters: ApplicationListFilters | None = None,
 ) -> ApplicationListResponse:
-    """The user's own applications, most recently updated first."""
+    """The user's own applications. Default order: most recently updated first; `applied`
+    sorts by application date (newest first, applications not yet applied last).
+
+    Company and source are matched against the context snapshot, so an application keeps
+    its company and source even when the canonical job later changes or disappears.
+    """
+    filters = filters or ApplicationListFilters()
     base = select(Application).where(Application.user_id == user.id)
+    if filters.statuses:
+        base = base.where(Application.status.in_(filters.statuses))
+    needs_context = bool(filters.company or filters.source)
+    if needs_context:
+        base = base.join(
+            ApplicationContextSnapshot, ApplicationContextSnapshot.application_id == Application.id
+        )
+    if filters.company:
+        base = base.where(
+            ApplicationContextSnapshot.document["job"]["company_name"]
+            .as_string()
+            .ilike(_like_pattern(filters.company.strip()), escape="\\")
+        )
+    if filters.source:
+        base = base.where(
+            func.lower(ApplicationContextSnapshot.document["source"]["source"].as_string())
+            == filters.source.strip().lower()
+        )
+    if filters.applied_from is not None:
+        base = base.where(
+            Application.applied_at >= datetime.combine(filters.applied_from, time.min, tzinfo=UTC)
+        )
+    if filters.applied_to is not None:
+        base = base.where(
+            Application.applied_at
+            < datetime.combine(filters.applied_to + timedelta(days=1), time.min, tzinfo=UTC)
+        )
+
+    order: list[Any] = (
+        [Application.applied_at.desc().nulls_last(), Application.updated_at.desc()]
+        if filters.sort == "applied"
+        else [Application.updated_at.desc()]
+    )
     total = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
     rows = db.scalars(
         base.options(selectinload(Application.context))
-        .order_by(Application.updated_at.desc(), Application.id)
+        .order_by(*order, Application.id)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .execution_options(populate_existing=True)
     ).all()
+    attempts = tracking.latest_attempts(db, user.id, [application.id for application in rows])
     return ApplicationListResponse(
-        items=[_to_summary(application) for application in rows],
+        items=[_to_summary(application, attempts.get(application.id)) for application in rows],
         total=total,
         page=page,
         page_size=page_size,

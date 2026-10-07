@@ -11,6 +11,7 @@
     V0.8 data  -> upgrade -> downgrade -> upgrade    (V0.9 roundtrip, questions and document origin)
     V0.9 data  -> upgrade -> downgrade -> upgrade    (V0.10 roundtrip, browser automation)
     V0.10 data -> upgrade -> downgrade -> upgrade    (V0.11 roundtrip, review & submit)
+    V0.11 data -> upgrade -> downgrade -> upgrade    (V0.12 roundtrip, application tracking)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -331,7 +332,8 @@ def test_v0_database_upgrades_to_head_without_data_loss(migration_db: Engine) ->
     assert posting["source_url"] == "https://job-boards.greenhouse.io/acme/jobs/42"
     assert posting["raw_data"] == {"id": 42}
     application = rows(migration_db, "SELECT job_id, status FROM applications")[0]
-    assert application == {"job_id": GH_JOB, "status": "DRAFT"}
+    # The V0 placeholder status DRAFT is the V0.12 status SAVED (the application survives).
+    assert application == {"job_id": GH_JOB, "status": "SAVED"}
 
 
 def test_downgrade_splits_merged_jobs_without_losing_postings(migration_db: Engine) -> None:
@@ -1053,8 +1055,9 @@ def test_a_v0_application_without_a_user_job_gets_one(migration_db: Engine) -> N
     assert user_job[0]["saved_at"] is None
     application = rows(migration_db, "SELECT * FROM applications")[0]
     assert application["user_job_id"] == user_job[0]["id"]
+    # (the V0 placeholder status DRAFT is the V0.12 status SAVED)
     assert (application["status"], application["salary_expectation"]) == (
-        "DRAFT", Decimal("65000.00"),
+        "SAVED", Decimal("65000.00"),
     )
     assert application["available_from"] == date(2026, 11, 15)
     document = rows(
@@ -1318,11 +1321,13 @@ def test_v07_data_survives_v08_upgrade_downgrade_upgrade(migration_db: Engine) -
     assert schema_fingerprint(migration_db, v07_tables) == schema_before
     assert enum_values(migration_db) == enums_before
     assert data_fingerprints(migration_db, v07_tables) == data_before
+    legacy = legacy_application_columns(migration_db)
+    applications_v07 = column_fingerprint(migration_db, "applications", legacy)
 
     # V0.7 -> V0.8 again, then the schema is exactly what the models declare.
     command.upgrade(config, "head")
     assert_v08_schema(migration_db)
-    assert data_fingerprints(migration_db, v07_tables) == data_before
+    assert_data_unchanged_since(migration_db, v07_tables, data_before, legacy, applications_v07)
     assert rows(migration_db, "SELECT count(*) AS n FROM generated_documents") == [{"n": 0}]
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
@@ -1588,12 +1593,13 @@ def test_v09_downgrade_restores_the_v08_schema_and_data_exactly(migration_db: En
     assert schema_fingerprint(migration_db, v08_tables) == schema_before
     assert enum_values(migration_db) == enums_before
     assert data_fingerprints(migration_db, v08_tables) == data_before
+    legacy = legacy_application_columns(migration_db)
+    applications_v08 = column_fingerprint(migration_db, "applications", legacy)
 
     # and upgrading again works, with the schema exactly what the models declare
     command.upgrade(config, "head")
     assert_v09_schema(migration_db)
-    fingerprints = data_fingerprints(migration_db, v08_tables)
-    assert fingerprints["applications"] == data_before["applications"]
+    assert column_fingerprint(migration_db, "applications", legacy) == applications_v08
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == []
@@ -1792,11 +1798,13 @@ def test_v010_downgrade_restores_the_v09_schema_and_data_exactly(migration_db: E
     assert schema_fingerprint(migration_db, v09_tables) == schema_before
     assert enum_values(migration_db) == enums_before
     assert data_fingerprints(migration_db, v09_tables) == data_before
+    legacy = legacy_application_columns(migration_db)
+    applications_v09 = column_fingerprint(migration_db, "applications", legacy)
 
     # and upgrading again works, with the schema exactly what the models declare
     command.upgrade(config, "head")
     assert_v010_schema(migration_db)
-    assert data_fingerprints(migration_db, v09_tables) == data_before
+    assert_data_unchanged_since(migration_db, v09_tables, data_before, legacy, applications_v09)
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == []
@@ -2009,13 +2017,306 @@ def test_v011_downgrade_restores_the_v010_schema_and_data_exactly(migration_db: 
     assert schema_fingerprint(migration_db, v010_tables) == schema_before
     assert enum_values(migration_db) == enums_before
     assert data_fingerprints(migration_db, v010_tables) == data_before
+    legacy = legacy_application_columns(migration_db)
+    applications_v010 = column_fingerprint(migration_db, "applications", legacy)
 
     # and upgrading again works, with the schema exactly what the models declare
     command.upgrade(config, "head")
     assert V011_TABLES <= user_tables(migration_db)
-    assert data_fingerprints(migration_db, v010_tables - {"automation_fields"}) == {
-        k: v for k, v in data_before.items() if k != "automation_fields"
-    }
+    assert_data_unchanged_since(
+        migration_db,
+        v010_tables - {"automation_fields"},
+        {k: v for k, v in data_before.items() if k != "automation_fields"},
+        legacy,
+        applications_v010,
+    )
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == []
+
+
+# --- V0.12: application tracking (status lifecycle, history, applied/follow-up dates) -------
+
+V012 = "d6a3f1b8c2e5"
+V012_STATUSES = [
+    "SAVED", "PREPARING", "APPLIED", "FOLLOW_UP", "INTERVIEW", "OFFER", "REJECTED", "WITHDRAWN",
+    "NO_RESPONSE",
+]
+V012_ENUMS = {
+    "application_status": V012_STATUSES,
+    "status_history_entry_type": ["STATUS_CHANGE", "CORRECTION", "NOTE"],
+    "status_change_source": ["SYSTEM", "USER", "SUBMISSION"],
+    "status_change_actor": ["USER", "SYSTEM"],
+}
+INTERVIEWING_APPLICATION = uuid.UUID("00000000-0000-4000-8000-0000000000c9")
+SUCCESS_ATTEMPT = uuid.UUID("00000000-0000-4000-8000-0000000000e1")
+
+
+def build_v011_database(engine: Engine, config: Config) -> None:
+    """A V0.11 database with realistic applications: one SUBMITTED by a confirmed
+    submission (with its review, authorization and attempt), one PREPARING, and one with the
+    V0 placeholder status INTERVIEWING (given its own user job and context)."""
+    build_v010_database(engine, config)
+    command.upgrade(config, V011)
+    insert_review(engine)
+    insert_authorization(engine, status="CONSUMED")
+    insert_attempt(engine, result="SUCCESS", triggered=True, id=SUCCESS_ATTEMPT)
+    execute(
+        engine,
+        "UPDATE automation_submission_attempts SET started_at = '2026-10-04T09:00:00Z', "
+        "submit_triggered_at = '2026-10-04T09:00:05Z', finished_at = '2026-10-04T09:00:09Z', "
+        "confirmation_reference = 'ABC-123' WHERE id = :id",
+        id=SUCCESS_ATTEMPT,
+    )
+    execute(
+        engine,
+        "INSERT INTO user_jobs (id, user_id, job_id, first_discovered_at, last_discovered_at) "
+        "VALUES (gen_random_uuid(), :user, :job, '2026-09-30T10:00:00Z', '2026-10-03T10:00:00Z')",
+        user=USER_ID, job=LEGACY_JOB,
+    )
+    execute(
+        engine,
+        "INSERT INTO applications (id, user_id, job_id, user_job_id, status, created_at, "
+        "updated_at) SELECT :id, :user, :job, uj.id, 'INTERVIEWING', '2026-10-05T08:00:00Z', "
+        "'2026-10-06T08:00:00Z' FROM user_jobs uj WHERE uj.user_id = :user AND uj.job_id = :job",
+        id=INTERVIEWING_APPLICATION, user=USER_ID, job=LEGACY_JOB,
+    )
+    execute(
+        engine,
+        "INSERT INTO application_context_snapshots "
+        "(id, application_id, schema_version, content_hash, document) "
+        "SELECT gen_random_uuid(), :new, schema_version, content_hash, document "
+        "FROM application_context_snapshots WHERE application_id = :legacy",
+        new=INTERVIEWING_APPLICATION, legacy=APPLICATION_ID,
+    )
+
+
+def statuses(engine: Engine) -> dict[uuid.UUID, str]:
+    return {
+        r["id"]: r["status"]
+        for r in rows(engine, "SELECT id, status::text AS status FROM applications")
+    }
+
+
+def history_of(engine: Engine, application: uuid.UUID) -> list[dict[str, Any]]:
+    return rows(
+        engine,
+        "SELECT sequence, entry_type::text AS entry_type, previous_status::text AS previous, "
+        "new_status::text AS new, changed_at, source::text AS source, actor::text AS actor, "
+        "note, submission_attempt_id FROM application_status_history "
+        "WHERE application_id = :a ORDER BY sequence",
+        a=application,
+    )
+
+
+def test_v011_data_survives_v012_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v011_database(migration_db, config)
+
+    v011_tables = user_tables(migration_db)
+    assert "application_status_history" not in v011_tables
+    untouched = v011_tables - {"applications"}
+    data_before = data_fingerprints(migration_db, untouched)
+    application_columns = [c for c in columns_of(migration_db, "applications") if c != "status"]
+    applications_before = column_fingerprint(migration_db, "applications", application_columns)
+    schema_before = schema_fingerprint(migration_db, untouched)
+    applications_schema_before = schema_fingerprint(migration_db, {"applications"})
+    enums_before = enum_values(migration_db)
+    assert statuses(migration_db) == {
+        APPLICATION_ID: "SUBMITTED",
+        V07_ONLY_APPLICATION: "PREPARING",
+        INTERVIEWING_APPLICATION: "INTERVIEWING",
+    }
+
+    # V0.11 -> V0.12: the status type is replaced, nothing else about existing rows changes.
+    command.upgrade(config, V012)
+    assert user_tables(migration_db) == v011_tables | {"application_status_history"}
+    enums = enum_values(migration_db)
+    for name, values in V012_ENUMS.items():
+        assert enums[name] == values, name
+    assert {k: v for k, v in enums.items() if k not in V012_ENUMS} == {
+        k: v for k, v in enums_before.items() if k not in V012_ENUMS
+    }
+    assert "application_status_v011" not in enums
+    assert statuses(migration_db) == {
+        APPLICATION_ID: "APPLIED",  # SUBMITTED -> APPLIED
+        V07_ONLY_APPLICATION: "PREPARING",
+        INTERVIEWING_APPLICATION: "INTERVIEW",  # INTERVIEWING -> INTERVIEW
+    }
+    # The V0.11 submission records and everything else are byte-for-byte what they were.
+    assert data_fingerprints(migration_db, untouched) == data_before
+    assert schema_fingerprint(migration_db, untouched) == schema_before
+    assert (
+        column_fingerprint(migration_db, "applications", application_columns)
+        == applications_before
+    )
+
+    # Every existing application got the history it would have had; status == latest row.
+    submitted = history_of(migration_db, APPLICATION_ID)
+    assert [(h["sequence"], h["previous"], h["new"]) for h in submitted] == [
+        (1, None, "SAVED"),
+        (2, "SAVED", "PREPARING"),
+        (3, "PREPARING", "APPLIED"),
+    ]
+    assert submitted[0]["changed_at"].isoformat() == "2026-10-02T12:00:00+00:00"  # saved_at
+    assert submitted[2]["changed_at"].isoformat() == "2026-10-04T09:00:09+00:00"  # confirmation
+    assert (submitted[2]["source"], submitted[2]["actor"]) == ("SUBMISSION", "SYSTEM")
+    assert submitted[2]["submission_attempt_id"] == SUCCESS_ATTEMPT
+    assert all(h["note"] is None for h in submitted)
+    assert all(h["entry_type"] == "STATUS_CHANGE" for h in submitted)
+    preparing = history_of(migration_db, V07_ONLY_APPLICATION)
+    assert [h["new"] for h in preparing] == ["SAVED", "PREPARING"]
+    assert all(h["source"] == "SYSTEM" for h in preparing)
+    interviewing = history_of(migration_db, INTERVIEWING_APPLICATION)
+    assert [(h["previous"], h["new"]) for h in interviewing] == [
+        (None, "SAVED"),
+        ("SAVED", "PREPARING"),
+        ("PREPARING", "INTERVIEW"),
+    ]
+    assert interviewing[2]["source"] == "SYSTEM" and interviewing[2]["submission_attempt_id"] is None
+    for application_id, current in statuses(migration_db).items():
+        history = history_of(migration_db, application_id)
+        assert history[-1]["new"] == current
+        assert [h["sequence"] for h in history] == list(range(1, len(history) + 1))
+        assert [h["changed_at"] for h in history] == sorted(h["changed_at"] for h in history)
+    tracking = {
+        r["id"]: r
+        for r in rows(
+            migration_db,
+            "SELECT id, applied_at, last_status_change_at, follow_up_at, updated_at "
+            "FROM applications",
+        )
+    }
+    assert tracking[APPLICATION_ID]["applied_at"].isoformat() == "2026-10-04T09:00:09+00:00"
+    assert tracking[APPLICATION_ID]["last_status_change_at"] == tracking[APPLICATION_ID]["applied_at"]
+    assert tracking[V07_ONLY_APPLICATION]["applied_at"] is None
+    assert tracking[INTERVIEWING_APPLICATION]["applied_at"] is not None
+    assert all(t["follow_up_at"] is None for t in tracking.values())
+
+    # The constraints enforce what the application relies on.
+    with pytest.raises(Exception, match="ck_applications_applied_at"):
+        execute(
+            migration_db,
+            "UPDATE applications SET status = 'FOLLOW_UP', applied_at = NULL WHERE id = :id",
+            id=V07_ONLY_APPLICATION,
+        )
+    with pytest.raises(Exception, match="ck_applications_follow_up_at"):
+        execute(
+            migration_db,
+            "UPDATE applications SET follow_up_at = now() WHERE id = :id",
+            id=V07_ONLY_APPLICATION,
+        )
+    with pytest.raises(Exception, match="uq_application_status_history_sequence"):
+        execute(
+            migration_db,
+            "INSERT INTO application_status_history (id, user_id, application_id, sequence, "
+            "entry_type, previous_status, new_status, changed_at, source, actor) VALUES "
+            "(gen_random_uuid(), :u, :a, 2, 'STATUS_CHANGE', 'PREPARING', 'APPLIED', now(), "
+            "'USER', 'USER')",
+            u=USER_ID, a=V07_ONLY_APPLICATION,
+        )
+    with pytest.raises(Exception, match="ck_application_status_history_correction"):
+        execute(
+            migration_db,
+            "INSERT INTO application_status_history (id, user_id, application_id, sequence, "
+            "entry_type, previous_status, new_status, changed_at, source, actor) VALUES "
+            "(gen_random_uuid(), :u, :a, 3, 'CORRECTION', 'PREPARING', 'APPLIED', now(), "
+            "'USER', 'USER')",
+            u=USER_ID, a=V07_ONLY_APPLICATION,
+        )
+    with pytest.raises(Exception, match="fk_application_status_history_application"):
+        execute(
+            migration_db,
+            "INSERT INTO application_status_history (id, user_id, application_id, sequence, "
+            "entry_type, previous_status, new_status, changed_at, source, actor) VALUES "
+            "(gen_random_uuid(), :u, :a, 3, 'STATUS_CHANGE', 'PREPARING', 'APPLIED', now(), "
+            "'USER', 'USER')",
+            u=uuid.uuid4(), a=V07_ONLY_APPLICATION,
+        )
+
+    # V0.12 -> V0.11: the V0.11 schema and data come back, SUBMITTED / INTERVIEWING restored.
+    command.downgrade(config, V011)
+    assert user_tables(migration_db) == v011_tables
+    assert enum_values(migration_db) == enums_before
+    assert statuses(migration_db) == {
+        APPLICATION_ID: "SUBMITTED",
+        V07_ONLY_APPLICATION: "PREPARING",
+        INTERVIEWING_APPLICATION: "INTERVIEWING",
+    }
+    assert data_fingerprints(migration_db, untouched) == data_before
+    assert schema_fingerprint(migration_db, untouched) == schema_before
+    assert schema_fingerprint(migration_db, {"applications"}) == applications_schema_before
+    assert (
+        column_fingerprint(migration_db, "applications", application_columns)
+        == applications_before
+    )
+
+    # ... and upgrading again gives the same result as the first time.
+    command.upgrade(config, "head")
+    assert statuses(migration_db) == {
+        APPLICATION_ID: "APPLIED",
+        V07_ONLY_APPLICATION: "PREPARING",
+        INTERVIEWING_APPLICATION: "INTERVIEW",
+    }
+    assert [h["new"] for h in history_of(migration_db, APPLICATION_ID)] == [
+        "SAVED", "PREPARING", "APPLIED",
+    ]
+    assert data_fingerprints(migration_db, untouched) == data_before
+    with migration_db.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == []
+
+
+def test_v012_downgrade_maps_tracking_only_statuses_to_the_nearest_v011_one(
+    migration_db: Engine,
+) -> None:
+    config = alembic_config()
+    build_v011_database(migration_db, config)
+    command.upgrade(config, V012)
+    execute(migration_db, "UPDATE applications SET status = 'SAVED' WHERE id = :id",
+            id=V07_ONLY_APPLICATION)
+    execute(
+        migration_db,
+        "UPDATE applications SET status = 'FOLLOW_UP', follow_up_at = now() WHERE id = :id",
+        id=APPLICATION_ID,
+    )
+    execute(migration_db, "UPDATE applications SET status = 'NO_RESPONSE' WHERE id = :id",
+            id=INTERVIEWING_APPLICATION)
+
+    command.downgrade(config, V011)
+
+    assert statuses(migration_db) == {
+        V07_ONLY_APPLICATION: "DRAFT",
+        APPLICATION_ID: "SUBMITTED",
+        INTERVIEWING_APPLICATION: "WITHDRAWN",  # a closed application, not a rejection
+    }
+    assert rows(migration_db, "SELECT count(*) AS n FROM applications") == [{"n": 3}]
+    command.upgrade(config, "head")
+    assert statuses(migration_db) == {
+        V07_ONLY_APPLICATION: "SAVED",
+        APPLICATION_ID: "APPLIED",
+        INTERVIEWING_APPLICATION: "WITHDRAWN",
+    }
+
+
+# V0.12 replaced applications.status (and added three columns). The older roundtrip tests
+# below compare an application's data across "upgrade to head": everything the application
+# had before V0.12 must be exactly the same; its status is covered by the V0.12 tests.
+V012_APPLICATION_COLUMNS = {"status", "applied_at", "last_status_change_at", "follow_up_at"}
+
+
+def legacy_application_columns(engine: Engine) -> list[str]:
+    return [c for c in columns_of(engine, "applications") if c not in V012_APPLICATION_COLUMNS]
+
+
+def assert_data_unchanged_since(
+    engine: Engine,
+    tables: set[str],
+    before: dict[str, tuple[int, str | None]],
+    legacy_columns: list[str],
+    applications_before: tuple[int, str | None],
+) -> None:
+    """Every table in `tables` has the data it had; applications on their pre-V0.12 columns."""
+    others = tables - {"applications"}
+    assert data_fingerprints(engine, others) == {k: v for k, v in before.items() if k in others}
+    assert column_fingerprint(engine, "applications", legacy_columns) == applications_before

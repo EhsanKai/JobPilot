@@ -1,9 +1,12 @@
-# JobPilot Architecture — V0 to V0.11
+# JobPilot Architecture — V0 to V0.12
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.11 Review & Submit (the first version that may
+to build on them without a rewrite. V0.12 Application Tracking (the lifecycle after an
+application exists: statuses, an append-only history, manual control) is summarized in §23 and
+documented in full in [`application-tracking.md`](application-tracking.md).
+V0.11 Review & Submit (the first version that may
 submit an application — only through a separate, explicitly authorized capability) is
 summarized in §22 and documented in full in
 [`browser-automation.md` §24 Submission Safety Model](browser-automation.md#24-v011-review--submit-the-submission-safety-model).
@@ -612,7 +615,7 @@ User
 - **The V0 table was evolved in place** (`start_date` became `available_from`;
   `salary_expectation`, `salary_currency`, `user_id`, `job_id`, `status` are
   kept), not duplicated. `PREPARING` is the only status V0.7 uses; the V0
-  lifecycle values stay for V0.12.
+  lifecycle values were placeholders that V0.12 replaced (§23).
 - **Application data is separate from the profile.** Salary expectation, "mention
   it in the letter", availability, notice period, work authorization,
   application language and private notes belong to the application; changing
@@ -902,11 +905,59 @@ V0.11   … → Human takeover → Final Review → Consent Review → Explicit 
   authorization until the user records what they found. `SUCCESS` needs evidence on the page
   (a confirmation phrase, URL or marker that was not there before), never just a click.
 - **Audit, not tracking.** `SubmissionAttempt` is append-only and holds safe metadata only.
-  A confirmed submission sets the application's (existing) `submitted` status — nothing of
-  V0.12's tracking is built.
+  A confirmed submission sets the application's status (V0.11: the existing `submitted`; since
+  V0.12 it goes through application tracking and is `APPLIED` — §23). The audit itself is
+  never touched by tracking.
 
 Migration `c5f2a8e1d9b3`, purely additive (four tables, three enum types, one nullable
 column). API: `…/automation/{sid}/final-review`, `…/consents/{fid}`,
 `…/submission-authorization`, `…/submit`, `…/automation/submissions`. UI: *Final review*
 inside the Browser assistant section.
 
+## 23. V0.12 — Application Tracking
+
+Full documentation: [`application-tracking.md`](application-tracking.md).
+
+> **The user manages and tracks every application after it exists — by hand, deterministically,
+> with a history nobody can rewrite.**
+
+```
+User → UserJob → Application ──┬── status (current)  ◄── one writer ──►  ApplicationStatusHistory (append-only)
+                               ├── applied_at · last_status_change_at · follow_up_at
+                               ├── ApplicationContextSnapshot     company · position · source · original URL
+                               └── SubmissionAttempt (V0.11)      read for the timeline; never changed
+```
+
+- **One entity.** The V0.7 `Application` is extended; there is no second "tracking" application.
+  Company, position, source and original URL come from the immutable V0.7 context snapshot, so
+  tracking stays understandable when the canonical job changes or its posting disappears.
+- **A controlled lifecycle.** `ApplicationStatus` = SAVED · PREPARING · APPLIED · FOLLOW_UP ·
+  INTERVIEW · OFFER · REJECTED · WITHDRAWN · NO_RESPONSE (the migration maps the V0 values,
+  `SUBMITTED → APPLIED`). Which status may follow which is a pure table
+  (`services/applications/state_machine.py`); an invalid change is a 409. A broader change needs an
+  explicit, noted **correction** — never a silent bypass.
+- **One writer, one transaction.** `services/applications/tracking.py` is the only code that changes
+  `Application.status`. It locks the application row (`FOR UPDATE`), reads the status under the lock,
+  validates, and writes the status and a history row together, so `Application.status` always equals the
+  latest history row's `new_status` (the current status is never recomputed from history), and
+  concurrent changes cannot corrupt either, the ordering (`sequence`) or the timestamps.
+- **Append-only history.** `ApplicationStatusHistory` rows (entry type, previous / new status, server
+  time, `source` SYSTEM / USER / SUBMISSION, `actor`, the user's note exactly as written) are never
+  updated (`ImmutableMixin`, database checks). A later change is another row. Previous status,
+  user, time and actor are derived by the server; request bodies that try to send them are rejected.
+- **Downstream of V0.11, never upstream.** A confirmed submission → `APPLIED` (`source=SUBMISSION`);
+  `SUBMISSION_UNKNOWN` and `FAILED_BEFORE_SUBMIT` do **not** — the user decides what an uncertain result
+  means. V0.11's two status writes were replaced by calls into tracking; its authorization, exactly-once
+  protection, consents and audit records are unchanged, and tracking has no path to submit.
+- **Deterministic and user-controlled.** No AI, no inference from text or time, no e-mail or calendar,
+  no scheduler: `follow_up_at` is a date shown to the user and nothing else acts on it. Notes are the
+  user's own words and are never rewritten or given to AI.
+- **My Applications.** `GET /applications` gains filters (status, company, source, application date) and
+  sorting, evaluated by the server against the snapshot; `GET /applications/summary` counts per status for
+  the dashboard and profile. The tracking page `/applications/{id}/tracking` shows the timeline (history +
+  V0.11 attempts, read in place) and the user's actions; the workspace gains a Tracking card.
+- **Ownership.** Every operation is scoped to the authenticated user; another user's application is the
+  usual 404. The history's composite foreign key `(application_id, user_id)` keeps rows with their owner.
+
+Migration `d6a3f1b8c2e5` (replaces the status type with an explicit mapping, adds three columns and the
+history table, backfills history for existing applications; downgrade → upgrade tested with data).

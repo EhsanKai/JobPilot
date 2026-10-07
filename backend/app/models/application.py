@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,6 +29,7 @@ from app.models.mixins import TimestampMixin
 if TYPE_CHECKING:
     from app.models.application_context_snapshot import ApplicationContextSnapshot
     from app.models.application_question import ApplicationQuestion
+    from app.models.application_status_history import ApplicationStatusHistory
     from app.models.generated_document import GeneratedDocument
     from app.models.job import Job
     from app.models.job_source_posting import JobSourcePosting
@@ -36,27 +39,38 @@ if TYPE_CHECKING:
 
 
 class ApplicationStatus(str, enum.Enum):
-    """Where an application is in its lifecycle.
+    """Where an application is in its tracking lifecycle (V0.12).
 
-    V0.7 only creates `PREPARING`: the user is getting the application
-    ready in the Application Workspace. The other values are V0 placeholders
-    for the complete lifecycle (submission, interviews, offers...), which
-    belongs to V0.12 -- nothing in V0.7 sets or transitions to them, and they
-    are kept only because Postgres cannot drop enum values and rows may exist.
+    The user-facing meaning of each value:
 
-    `PREPARING` is declared last on purpose: it was appended to the existing
-    "application_status" Postgres type by the V0.7 migration, and Postgres
-    enums cannot be reordered.
+    - SAVED         the job is known to JobPilot, no application work has started
+    - PREPARING     the Application Workspace exists and preparation is under way
+    - APPLIED       the application was submitted (by V0.11, or the user says so)
+    - FOLLOW_UP     submitted, and the user is waiting / following up
+    - INTERVIEW     the employer invited the user to an interview
+    - OFFER         the employer made an offer
+    - REJECTED      the employer rejected the application
+    - WITHDRAWN     the user withdrew the application
+    - NO_RESPONSE   the user considers the application inactive: nobody replied
+
+    REJECTED and NO_RESPONSE are different facts and stay distinct. Which change
+    is allowed from which status is `services.applications.state_machine`.
+
+    V0-V0.11 used a different set (draft, in_progress, submitted, interviewing,
+    ...). The V0.12 migration replaced it: SUBMITTED became APPLIED -- what
+    happened technically stays in the V0.11 submission records -- and the others
+    map one-to-one. The values equal the names, like every V0.9+ enum.
     """
 
-    DRAFT = "draft"
-    IN_PROGRESS = "in_progress"
-    SUBMITTED = "submitted"
-    INTERVIEWING = "interviewing"
-    OFFER = "offer"
-    REJECTED = "rejected"
-    WITHDRAWN = "withdrawn"
-    PREPARING = "preparing"
+    SAVED = "SAVED"
+    PREPARING = "PREPARING"
+    APPLIED = "APPLIED"
+    FOLLOW_UP = "FOLLOW_UP"
+    INTERVIEW = "INTERVIEW"
+    OFFER = "OFFER"
+    REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"
+    NO_RESPONSE = "NO_RESPONSE"
 
 
 class NoticePeriodUnit(str, enum.Enum):
@@ -91,6 +105,7 @@ class Application(Base, TimestampMixin):
                      +-- preparation data             salary, availability, language, notes...
                      +-- resume reference             which resume version it builds on
                      +-- GeneratedDocument (many)     tailored CV / Anschreiben, V0.8
+                     +-- ApplicationStatusHistory     append-only tracking timeline, V0.12
 
     Starting an application is an explicit user action; a match, a saved job
     or an opened job never creates one. `user_job_id` is unique, so a job has
@@ -112,6 +127,14 @@ class Application(Base, TimestampMixin):
     application's salary expectation (annual gross, like Job Preferences),
     and V0's `start_date` is now `available_from`: the date the candidate can
     start for this application.
+
+    Tracking (V0.12): `status` is the *current* tracking status, kept for fast
+    queries; `status_history` is the audit trail and `status` always equals the
+    new status of its latest entry (both change in one transaction, under a row
+    lock, in `services.applications.tracking`). `applied_at` is when the
+    application first counted as applied, `last_status_change_at` when the
+    status last moved, and `follow_up_at` a date the user set for themselves --
+    nothing acts on it.
     """
 
     __tablename__ = "applications"
@@ -142,8 +165,21 @@ class Application(Base, TimestampMixin):
             "application_language IS NULL OR application_language ~ '^[a-z]{2}$'",
             name="ck_applications_application_language",
         ),
+        # An application that has been applied has a date for it.
+        CheckConstraint(
+            "status NOT IN ('APPLIED', 'FOLLOW_UP', 'INTERVIEW', 'OFFER') "
+            "OR applied_at IS NOT NULL",
+            name="ck_applications_applied_at",
+        ),
+        # A follow-up date only means something while the user is waiting.
+        CheckConstraint(
+            "follow_up_at IS NULL OR status IN ('APPLIED', 'FOLLOW_UP', 'INTERVIEW')",
+            name="ck_applications_follow_up_at",
+        ),
         # "My applications, most recently touched first."
         Index("ix_applications_user_id_updated_at", "user_id", "updated_at"),
+        # "My applications in this status" and the per-status counts (V0.12).
+        Index("ix_applications_user_id_status", "user_id", "status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -160,6 +196,16 @@ class Application(Base, TimestampMixin):
         default=ApplicationStatus.PREPARING,
         nullable=False,
     )
+    # --- Tracking (V0.12) ------------------------------------------------------------
+    # When the application first counted as applied (a confirmed V0.11 submission,
+    # or the user saying so). NULL until then.
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # When `status` last changed (a note is not a status change).
+    last_status_change_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # A date the user set to follow up on. A reminder for the user, never a trigger.
+    follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # --- Where to apply -----------------------------------------------------------
     # The source posting chosen as the application target (the job's preferred
@@ -230,4 +276,11 @@ class Application(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="ApplicationQuestion.sort_order, ApplicationQuestion.created_at",
+    )
+    # The tracking timeline (V0.12), oldest first. Append-only.
+    status_history: Mapped[list["ApplicationStatusHistory"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ApplicationStatusHistory.sequence",
     )

@@ -30,6 +30,7 @@ export function updateApplication(
   return api.patch<Application>(`/applications/${encodeURIComponent(applicationId)}`, patch);
 }
 
+/** Page of your applications (see `lib/api/tracking.ts` for the filtered "My Applications" list). */
 export function listApplications(page = 1, pageSize = 20): Promise<ApplicationList> {
   return api.get<ApplicationList>(`/applications?page=${page}&page_size=${pageSize}`);
 }

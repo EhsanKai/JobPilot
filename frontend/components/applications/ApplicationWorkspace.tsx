@@ -6,6 +6,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { ApplicationDocuments } from "@/components/applications/ApplicationDocuments";
 import { ApplicationQuestions } from "@/components/applications/ApplicationQuestions";
 import { BrowserAssistant } from "@/components/applications/BrowserAssistant";
+import { StatusBadge } from "@/components/tracking/StatusBadge";
+import { TrackingSummaryCard } from "@/components/tracking/TrackingSummaryCard";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -14,7 +16,6 @@ import { getApplication, updateApplication } from "@/lib/api/applications";
 import { listResumes } from "@/lib/api/resumes";
 import {
   APPLICATION_LANGUAGE_OPTIONS,
-  APPLICATION_STATUS_LABELS,
   FIELD_IDS,
   NOTICE_UNIT_OPTIONS,
   PREPARATION_LABELS,
@@ -193,12 +194,7 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
             {job.location ? ` · ${job.location}` : ""}
           </p>
         </div>
-        <span
-          className="rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand-700"
-          aria-label="Application status"
-        >
-          {APPLICATION_STATUS_LABELS[application.status]}
-        </span>
+        <StatusBadge status={application.status} aria-label="Application status" className="text-sm" />
       </div>
 
       <Alert variant="info">
@@ -494,6 +490,7 @@ export function ApplicationWorkspace({ applicationId }: { applicationId: string 
         </div>
 
         <aside className="flex flex-col gap-6">
+          <TrackingSummaryCard applicationId={application.id} tracking={application.tracking} />
           <ProgressCard progress={application.progress} createdAt={application.created_at} />
           <MatchCard match={application.match} jobId={application.job_id} />
         </aside>

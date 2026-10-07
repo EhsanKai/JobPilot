@@ -221,7 +221,8 @@ test("review, authorize and submit an application -- exactly once, with a confir
   const text = JSON.stringify(attempts);
   expect(text).not.toMatch(/cookie|password|integrations\./i);
   await page.reload();
-  await expect(page.getByText("Submitted", { exact: true }).first()).toBeVisible();
+  // V0.12: a confirmed submission is the tracking status "Applied" (V0.11 showed "Submitted").
+  await expect(page.getByLabel("Application status")).toContainText("Applied");
 });
 
 test("nothing is pressed without an authorization, after an edit, or without the consent; concurrent submits press once", async ({

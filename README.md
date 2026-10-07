@@ -13,7 +13,8 @@ foundations (data model and taxonomy), **V0.6 — Job Matching &
 Explainability**, **V0.7 — Application Workspace**, **V0.8 — Tailored CV &
 Anschreiben Generation**, **V0.9 — Application Question AI + Human Control at
 Every Stage**, **V0.10 — Browser Automation & Human-Controlled Application
-Filling** and **V0.11 — Review & Submit**.
+Filling**, **V0.11 — Review & Submit** and **V0.12 — Application Tracking
+Foundation**.
 
 ## 1. What JobPilot is
 
@@ -21,7 +22,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.11)
+## 2. Current scope (V0 – V0.12)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -290,8 +291,27 @@ authorize it; only then does JobPilot press the employer's final button — once
 
 See the Submission Safety Model in
 [`docs/browser-automation.md` §24](docs/browser-automation.md#24-v011-review--submit-the-submission-safety-model).
-Not in V0.11: application tracking, follow-ups, interviews (V0.12), multi-step forms,
-retries of any kind, bulk submission.
+Not in V0.11: multi-step forms, retries of any kind, bulk submission.
+
+V0.12 adds **Application Tracking**: *you manage every application after it exists — by hand,
+with a history nobody can rewrite.*
+
+- **A lifecycle.** Saved → Preparing → Applied → Follow-up → Interview → Offer, and Rejected /
+  Withdrawn / No response. Which change is allowed from which status is an explicit table; a
+  wrongly recorded status is fixed with an explicit *correction* (with a note), never silently.
+- **Applied only from a confirmed submission.** A confirmed V0.11 submission makes the application
+  Applied. An uncertain submission does not: you decide. Everything after that — an interview
+  invitation, an offer, a rejection — you record yourself.
+- **An append-only timeline.** Every status change and note is a new entry (when, who, source, your
+  words exactly as written); the V0.11 submission audit is shown in it, never changed.
+- **My Applications** (`/applications`): company, position, status, application date, last change,
+  follow-up date, submission result and the original job link; filter by status, company, source and
+  date, sort by last update or application date. A count per status on the dashboard and profile.
+- **A follow-up date is only a date.** Nothing is sent and nothing runs when it passes.
+
+No AI, e-mail, calendar or automatic status inference. See
+[`docs/application-tracking.md`](docs/application-tracking.md). Not in V0.12: AI follow-ups,
+interview preparation, offer negotiation, inbox / calendar integration, reminders, bulk actions.
 
 ## 3. Tech stack
 
@@ -326,7 +346,8 @@ jobpilot/
 │   │   │                  resumes (+ Resume Intelligence), jobs (V0.3),
 │   │   │                  matching (V0.6), applications (V0.7),
 │   │   │                  documents (V0.8), questions (V0.9),
-│   │                  automation (V0.10)
+│   │                  automation (V0.10); application tracking (V0.12) is
+│   │                  part of applications
 │   │   ├── core/        Config, security, logging, error handling
 │   │   ├── db/          SQLAlchemy base + session
 │   │   ├── models/      SQLAlchemy models
@@ -334,7 +355,8 @@ jobpilot/
 │   │   └── services/    Business logic, storage abstraction, resume_intelligence/
 │   │                      pipeline, job_discovery/ (sources, normalizer,
 │   │                      normalization/, deduplication/, discovery),
-│   │                      matching/ (V0.6), applications/ (V0.7),
+│   │                      matching/ (V0.6), applications/ (V0.7; V0.12:
+│   │                      state_machine, tracking),
 │   │                      documents/ (V0.8: facts, context, validation),
 │   │                      questions/ (V0.9), automation/ (V0.10: browser/,
 │   │                      discovery, mapping, resolver, filler, controller)
@@ -505,7 +527,7 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.11)
+## 12. API endpoints (V0 – V0.12)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
@@ -615,6 +637,12 @@ POST   /applications/{id}/automation/{sid}/submission-authorization   your expli
 POST   /applications/{id}/automation/{sid}/submit           submit under an authorization, once
 GET    /applications/{id}/automation/submissions            submission attempts (the audit trail)
 POST   /applications/{id}/automation/submissions/{aid}/verification   after an unknown result
+
+GET    /applications                              My Applications: ?status=&company=&source=&applied_from=&applied_to=&sort= (V0.12)
+GET    /applications/summary                      count per status
+PATCH  /applications/{id}/status                  change the tracking status (validated; or an explicit correction)
+PATCH  /applications/{id}/tracking                set / clear the follow-up date, add a note
+GET    /applications/{id}/timeline                status history + submission attempts, newest first
 ```
 
 `GET /jobs` and `GET /jobs/{id}` include each job's `match` summary (or
@@ -643,7 +671,7 @@ V0.8   Tailored CV + Anschreiben    ✅
 V0.9   Application Question AI + Human Control   ✅
 V0.10  Browser Automation & Human-Controlled Filling   ✅
 V0.11  Review & Submit             ✅
-V0.12  Application Tracking
+V0.12  Application Tracking Foundation   ✅
 V0.13  Multi-source Expansion
 V0.14  Smart Apply Strategy
 V1.0   Production Release

@@ -188,7 +188,7 @@ def test_review_authorize_and_submit_exactly_once_with_a_verified_confirmation(
     assert authorization_row(db_session, authorization["id"]).status.value == "CONSUMED"
     assert review_row(db_session, confirmed["id"]).status.value == "USED"
     application = db_session.get(Application, uuid.UUID(ctx.aid), populate_existing=True)
-    assert application is not None and application.status.value == "submitted"
+    assert application is not None and application.status.value == "APPLIED"
     session = ctx.session_now()
     assert session["status"] == "STOPPED"
 
@@ -808,7 +808,7 @@ def test_a_user_who_finds_it_submitted_marks_the_application_submitted(
     ok(client.post(verify, headers=auth, json={"outcome": "SUBMITTED"}))
     assert ctx.attempts()["submitted"] is True
     application = db_session.get(Application, uuid.UUID(ctx.aid), populate_existing=True)
-    assert application is not None and application.status.value == "submitted"
+    assert application is not None and application.status.value == "APPLIED"
 
 
 def test_a_browser_that_disconnects_after_the_press_is_unknown(

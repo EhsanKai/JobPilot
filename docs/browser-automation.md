@@ -743,8 +743,10 @@ cookies, tokens, authorization headers, page content, or submitted values in eve
 already do). All V0.10 rules on URLs, private hosts, challenges and logins apply unchanged.
 
 **Application status.** A confirmed `SUCCESS` (or the user's "it was received") sets the
-application's existing `submitted` status — the only status change V0.11 makes. Tracking
-(interviews, follow-ups, offers, history) is V0.12.
+application's `submitted` status — the only status change V0.11 makes. (V0.12: that status is
+now `APPLIED`, set through application tracking, which also keeps the history; an unknown or failed
+result still changes nothing. The submission audit is untouched — see
+[`application-tracking.md` §5](application-tracking.md#5-submission-integration).)
 
 ### 24.12 API (V0.11)
 
