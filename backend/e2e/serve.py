@@ -27,6 +27,12 @@ a CAPTCHA). `/e2e/human/...` is a test-only stand-in for the person at the brows
 it types into the very page the assistant works in, outside the assistant, the way a user
 does in the window. It lives in this file only -- nothing in `app/` can reach it.
 
+V0.11 (review & submit): `/e2e/submit-vacancies` publishes two more vacancies on the same fake
+site, whose final button really submits: "Integration Engineer" (`/submit-apply`: the server
+confirms the application) and "QA Engineer" (`/submit-ambiguous`: the page never confirms
+anything). `/e2e/site` reports every press of a final button and every application the fake
+employer received. A missing confirmation is given up on after 3 s here (production: 20 s).
+
 Mock content: one SAP vacancy published on both boards (Cologne / "Köln",
 same text) plus a Lever posting with the same title in Munich, which must
 stay a separate job.
@@ -151,6 +157,10 @@ def main() -> None:
     site = FakeApplicationSite(port=int(os.environ.get("E2E_SITE_PORT", "8765"))).start()
     settings.AUTOMATION_BROWSER_HEADLESS = True
     settings.AUTOMATION_ALLOW_PRIVATE_HOSTS = True
+    settings.SUBMISSION_RESULT_TIMEOUT_SECONDS = 3.0
+    # Many users share this one server in a full E2E run, and a stopped or submitted session
+    # keeps its browser open for the user (by design): allow more than the default 3.
+    settings.AUTOMATION_MAX_BROWSERS = 10
     chromium = os.environ.get("E2E_CHROMIUM_PATH")
     if chromium:
         settings.AUTOMATION_CHROMIUM_PATH = chromium
@@ -217,6 +227,44 @@ def main() -> None:
                         title="Security Analyst",
                         location="Bremen, Germany",
                         url=site.url("/challenge"),
+                    ),
+                ]
+            },
+            board={"name": "Example GmbH"},
+        )
+        return {"ok": "true"}
+
+    @vacancies.post("/submit-vacancies")
+    def submit_vacancies() -> dict[str, str]:
+        """V0.11: the two vacancies whose application form really submits."""
+        boards.greenhouse_board(
+            "example",
+            jobs={
+                "jobs": [
+                    greenhouse_job(7001),
+                    greenhouse_job(
+                        7002,
+                        title="Platform Engineer",
+                        location="Hamburg, Germany",
+                        url=site.url("/apply"),
+                    ),
+                    greenhouse_job(
+                        7003,
+                        title="Security Analyst",
+                        location="Bremen, Germany",
+                        url=site.url("/challenge"),
+                    ),
+                    greenhouse_job(
+                        7101,
+                        title="Integration Engineer",
+                        location="Hamburg, Germany",
+                        url=site.url("/submit-apply"),
+                    ),
+                    greenhouse_job(
+                        7102,
+                        title="QA Engineer",
+                        location="Bremen, Germany",
+                        url=site.url("/submit-ambiguous"),
                     ),
                 ]
             },

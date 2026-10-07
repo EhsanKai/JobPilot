@@ -12,6 +12,12 @@ value back to check it, and hands the browser to the user whenever they want it.
 **V0.10 never submits an application.** There is no `SUBMITTED` status, no endpoint that
 submits, and the browser interface has no way to click a button (§11).
 
+> **V0.11 update.** V0.11 adds *Review & Submit*: a separate, explicitly authorized,
+> exactly-once submission capability with its own guard, documented in
+> [§24 — the Submission Safety Model](#24-v011-review--submit-the-submission-safety-model).
+> Everything in §1–§22 still holds: the fill assistant and its `BrowserPage` interface
+> still cannot press anything, and `SUBMIT_ACTIONS_ALLOWED` is still `False`.
+
 ```
 Application
     ↓  (the user presses "Start browser assistant")
@@ -54,7 +60,8 @@ STOP    (the user submits the application themselves)
 20. [Testing](#20-testing)
 21. [Limitations](#21-limitations)
 22. [Technical debt](#22-technical-debt)
-23. [Preparing V0.11 (not built)](#23-preparing-v011-not-built)
+23. [Preparing V0.11 (built — see §24)](#23-preparing-v011-built--see-24)
+24. [V0.11 Review & Submit: the Submission Safety Model](#24-v011-review--submit-the-submission-safety-model)
 
 ## 1. Principles
 
@@ -302,7 +309,8 @@ replaced in the browser is theirs.
 
 ## 11. The no-submit rule
 
-`SUBMIT_ACTIONS_ALLOWED = False` (`services/automation/safety.py`), enforced structurally:
+`SUBMIT_ACTIONS_ALLOWED = False` (`services/automation/safety.py`), enforced structurally
+(still true in V0.11 for the fill assistant; submitting is a separate capability, §24):
 
 1. **The browser interface has no click.** `BrowserPage` can read, type, choose, check and
    attach — there is no method that presses a button or a key, so no code built on it can
@@ -327,8 +335,9 @@ newsletters / talent-pool opt-ins and signature fields (English and German) are 
 `USER_ACTION_REQUIRED` (`LEGAL_CONSENT`), get no question and are **never ticked** — not
 automatically, and not even if the user wrote a matching question with the answer "Yes".
 The UI says: *"Only you can give it: JobPilot never ticks these."* The user ticks them
-themselves, and the assistant leaves them alone. (A later version may offer an explicit,
-per-consent authorization; V0.10 offers none.)
+themselves, and the assistant leaves them alone. (V0.11 adds an explicit, per-consent
+authorization for exactly the consent text shown — §24.6; the fill assistant still never
+ticks a consent.)
 
 ## 13. Security challenges, login and unexpected websites
 
@@ -497,7 +506,7 @@ page, an interstitial, a 403, an empty page, an SPA, a cross-site redirect).
 - Locator resolution re-enumerates the page's controls for every read/write (simple and
   robust, O(fields) per write).
 
-## 23. Preparing V0.11 (not built)
+## 23. Preparing V0.11 (built — see §24)
 
 V0.11 (review and submission) can build on the pieces that exist: the event log
 (`FIELD_FILLED`, `FIELD_VERIFIED`, `USER_MODIFIED` …) is the audit trail; `submit_detected`
@@ -507,3 +516,314 @@ new, separate, explicitly authorized capability behind the human's confirmation 
 loosening `SUBMIT_ACTIONS_ALLOWED`. Consent authorization would be per-consent and explicit.
 `AutomationField.last_value_source` and the read-back values give the review its
 provenance; a PDF export (V0.8 content is structured) would remove the DOCX-only limit.
+
+## 24. V0.11 Review & Submit: the Submission Safety Model
+
+> **AI prepares the application; the user reviews it and authorizes it; only then does
+> JobPilot press the employer's final button — once.**
+
+V0.11 is the first version that may submit an application. It never does so because the
+form is complete, because the page shows a final button, because answers were approved
+earlier or because the application "looks ready". It submits only after a **final review**
+the user confirmed, an **explicit, per-consent authorization** of every consent that is
+given, and a **fresh, explicit submission authorization** given immediately before — and it
+re-proves, immediately before the press, that the page is still exactly what was reviewed.
+
+```
+Discover → Map → Review → Approve → Fill → Verify → Human takeover            (V0.10)
+   → Final Review              FinalReview: immutable snapshot + SHA-256 of the live state
+   → Consent Review            ConsentAuthorization per consent, for its exact text
+   → Explicit Authorization    SubmissionAuthorization: review + hash + session + host, expiring
+   → Dedicated Submit          FinalSubmissionChannel.submit_final_application(SubmitPermit)
+   → Submit Exactly Once       authorization consumed + attempt created in one locked transaction
+   → Verify Result             SUCCESS on evidence · FAILED_BEFORE_SUBMIT · SUBMISSION_UNKNOWN
+```
+
+### 24.1 Why submit is separate from fill
+
+Filling and submitting have different risks. A wrong fill is visible and reversible; a
+submission is not. So V0.11 does **not** loosen V0.10:
+
+- `SUBMIT_ACTIONS_ALLOWED` stays `False` — it describes the fill assistant, which still never
+  submits; the V0.10 test pinning it is unchanged.
+- `BrowserPage` / `BrowserSession` / `BrowserDriver` are unchanged and still have no click,
+  key press or submit method (the V0.10 structural test still passes, unmodified).
+- Pressing the final button lives on a **second, narrow interface**,
+  `FinalSubmissionChannel` (`browser/final_submit.py`), which a Playwright session offers in
+  addition (`SupportsFinalSubmission`):
+
+  | Method | Does |
+  | --- | --- |
+  | `find_final_controls()` | lists visible buttons (reads) |
+  | `page_marker()` | which page *instance* is shown — changes on any navigation, reload or new window |
+  | `submit_final_application(permit)` | presses the one button the permit names, once |
+  | `read_outcome()` | what the page shows afterwards (reads; kept in memory only) |
+
+  There is no `click(selector)`, no key press and no script evaluation. The acting method
+  takes a `SubmitPermit` — no selector, no URL. A permit can only be created through
+  `issue_permit`, whose only caller is `services/automation/submission.py` (a test pins
+  that), and is **single-use**: redeeming it twice raises.
+- The Playwright implementation (`PlaywrightFinalSubmission`) re-finds the button from the
+  permit's description (by stable id, else name + label + ordinal — never position alone),
+  checks the page's host equals the permit's, that the element is a real `<button>` or
+  `<input type=submit>`, enabled, and able to receive the press (a Playwright *trial* click,
+  which presses nothing). Any of these failing raises `SubmissionNotTriggered` — certainly
+  not pressed. Then exactly one `click()`. It is the only `.click(` in `app/` (a test pins
+  that too).
+
+### 24.2 The final review
+
+`GET …/automation/{sid}/final-review` computes the **submission state** from the live page
+(`services/automation/review.py`), after bringing the session's fields up to date (a V0.10
+discovery — reads only). It shows, and the UI renders in six sections:
+
+1. **Destination** — company, role, website (host and site), the page (no query), the source,
+   the final button's caption.
+2. **Personal information** and 3. **Application questions** — for every field that will
+   be submitted: its identity, label, question, **final value as the form holds it**, its
+   **source** (`USER` "Your answer" / "Typed by you in the browser", `DETERMINISTIC` "From
+   your application data", `ACCEPTED_AI` "AI-generated → accepted by you",
+   `BROWSER_DISCOVERED` "Already on the page"), approval and verification (`VERIFIED` = the
+   page holds exactly the approved value; read back, not assumed).
+4. **Documents** — per file field: document id, type, exact version, origin ("edited by
+   you", "reworded by Humanize" …), a SHA-256 of the version's content, and the attached
+   file as the page reports it. The pinned version is never replaced by a newer one; a
+   newer version is a *note*, choosing it is a change.
+5. **Consents** — each one separately, with its exact text, required or not, given in the
+   page or not, authorized by the user or not.
+6. **Warnings** — *blockers* (anything unresolved) and notes.
+
+**Blockers** (anything listed blocks review, authorization and submission): the assistant
+not working on the page (user in control, paused, blocked, browser gone), another website,
+a security check, a login, a truncated or changed form, no final button / **more than one
+plausible final button** / a final action that is a link, a field that is gone, a mapping
+that needs review, an unreviewed AI suggestion, a field without an approved answer
+(answer it, type it, or leave it unmapped to send it empty), an empty required field, an
+approved answer not yet (or no longer) in the form, a failed fill, a control JobPilot cannot
+read, a chosen document that is unavailable or not attached, a missing required file, a
+consent not authorized / given without authorization / authorized but not given / whose text
+changed, an earlier attempt still running, an application already submitted, or an earlier
+**unknown** result the user has not checked yet.
+
+Final-button identification uses captions as *candidate signals* only (English and German:
+*Submit application, Send application, Complete application, Apply, Bewerbung absenden /
+einreichen / abschicken, Jetzt bewerben …*); `type=submit` alone is none, and two plausible
+candidates block.
+
+**Confirming** (`POST …/final-review {expected_state_hash}`) persists a `FinalReview` only
+if the live state still has exactly the hash the user was shown and nothing blocks it.
+
+### 24.3 Immutable reviewed state
+
+`FinalReview` (`automation_final_reviews`) is write-once (`ImmutableMixin`): the snapshot
+(the canonical state, including the values the user reviewed), `state_hash`,
+`schema_version`, destination host / site / URL, the reviewed `page_marker`, and the time.
+Only its lifecycle moves, forward: `ACTIVE → INVALIDATED` (with reason) / `SUPERSEDED` (a
+newer review) / `USED` (its authorization was consumed). One `ACTIVE` review per session
+(partial unique index). It is never edited to match a changed page: the user reviews again.
+
+### 24.4 The state hash
+
+`hash_state` = SHA-256 of the canonical JSON (sorted keys, no whitespace) of the state:
+application and session, destination host / site / URL, every field (key, label, type,
+required, mapping status, question id and text, final value, approved value, source,
+approval, verification), every document (key, type, id, version, origin, content hash,
+attached file), every consent (key, exact text and its hash, required, state, authorized)
+and the final button (caption, tag, type, id, name, form, ordinal). **Not** hashed: row ids
+that do not change what is sent, timestamps, display labels, screenshots, UI state. Which
+page *instance* was reviewed is compared separately (`page_marker`), so a reload — which may
+look identical — still counts as a change. Tests pin: identical state → identical hash; each
+meaningful change → a different hash; volatile metadata → the same hash.
+
+### 24.5 Submission authorization
+
+`POST …/submission-authorization {final_review_id, reviewed_state_hash, confirm: true}` —
+`confirm` must be literally `true` ("I have reviewed the information above and authorize
+JobPilot to submit this application"). It is granted only when, **now**: the user owns the
+application and session; the session is working on the page with a live browser; the review
+is the session's `ACTIVE` one and the request carries its hash; the live state has no blocker
+(this covers domain, CAPTCHA, login, required fields, answers, mappings, documents, consents,
+history); the live hash equals the review's and the page instance is the reviewed one; and
+no other authorization is open. `SubmissionAuthorization` records user, application, session,
+review, hash, host, `AUTHORIZED` → `CONSUMED` / `EXPIRED` / `INVALIDATED`, `expires_at`
+(`SUBMISSION_AUTHORIZATION_TTL_SECONDS`, default 10 min), `consumed_at`, `invalidated_at` +
+reason. One open per application, one per review (database constraints). The UI asks for it
+with a deliberate step — a checkbox naming the website, then **Authorize & Submit** — not a
+"continue" in the workflow; the server never trusts the UI for any of it.
+
+### 24.6 Consent authorization
+
+Each legal confirmation (V0.10's `LEGAL_CONSENT` fields) is represented on its own, with its
+exact text (`automation_fields.consent_text`: the label, plus the options of a group).
+`POST …/consents/{field_id} {consent_text_hash, give}` records a `ConsentAuthorization` for
+**exactly** the text the user was shown (refused with `CONSENT_TEXT_CHANGED` if the page now
+says something else); with `give` (default) JobPilot then ticks *that one* checkbox, under the
+same write gate as every fill, and reads it back. `DELETE` withdraws it (and unticks the box).
+There is no "agree to everything", answering "Yes" to a question authorizes nothing, and the
+fill assistant still never ticks a consent. Required consents must be authorized and given; a
+consent ticked in the page without authorization blocks; a changed text matches no
+authorization and invalidates the review.
+
+### 24.7 Exactly-once protection
+
+`POST …/{sid}/submit {authorization_id}` — the request names an authorization and nothing
+else (unknown keys: 422; no URL, selector or form data can be sent):
+
+1. **Claim** (one transaction): lock the session row, lock the authorization row; it must be
+   the user's, this application's and this session's, `AUTHORIZED`, unexpired, its review
+   still `ACTIVE`, the application not submitted / in flight / unknown, the session working.
+   Then `AUTHORIZED → CONSUMED`, review `→ USED`, and a `SubmissionAttempt` row — committed
+   together. A concurrent second request waits for the lock and then finds `CONSUMED` (409).
+   Backstops in the database: one attempt per authorization; one unfinished attempt per
+   application.
+2. **Verify under the write gate**: the session row is locked `FOR SHARE` (a take-control,
+   pause or stop waits until the press is over — and if one came first, nothing is pressed),
+   the state is recomputed from the live page without writing anything, and must have no
+   blocker, the reviewed page instance, the authorized host and the reviewed hash.
+   Otherwise: `FAILED_BEFORE_SUBMIT` (`STATE_CHANGED`, `PAGE_RELOADED`, `WRONG_DESTINATION`,
+   `SUBMISSION_BLOCKED`, `USER_TOOK_CONTROL` …) — nothing pressed.
+3. **Record, then press**: `submit_triggered_at` is written and committed (in its own short
+   transaction) *before* the press; then the permit is issued and redeemed.
+
+Tests: two concurrent submit requests (separate DB sessions; and two parallel HTTP requests in
+the E2E) → one `SUCCESS`, one 409, one press, one application received.
+
+### 24.8 No automatic retry; ambiguous results
+
+After `submit_triggered_at`, JobPilot never presses again. A press that raised, a browser that
+closed or crashed, a page that did not confirm within `SUBMISSION_RESULT_TIMEOUT_SECONDS`
+(default 20 s): **`SUBMISSION_UNKNOWN`** — "We could not safely determine whether the
+application was submitted. For your safety, JobPilot will NOT submit again automatically."
+The application then accepts **no new authorization** (`PREVIOUS_SUBMISSION_UNKNOWN`) until the
+user checks with the employer and records it once (`POST …/submissions/{id}/verification
+{outcome: SUBMITTED | NOT_SUBMITTED}`); `SUBMITTED` marks the application submitted,
+`NOT_SUBMITTED` allows a new review. An attempt left unfinished by a server that stopped is
+finished as `SUBMISSION_UNKNOWN` (`INTERRUPTED_AFTER_PRESS`) if `submit_triggered_at` is set,
+else as `FAILED_BEFORE_SUBMIT` — never resumed. The database enforces it: `SUCCESS` /
+`SUBMISSION_UNKNOWN` require `submit_triggered_at`, `FAILED_BEFORE_SUBMIT` forbids it.
+
+### 24.9 Result verification
+
+A click is not proof. After the press JobPilot reads the page (reads only) until it sees
+**evidence** that was *not* there before the press: a recognized confirmation phrase (English /
+German: "Thank you for your application", "Your application has been submitted", "Vielen
+Dank für Ihre Bewerbung", "Ihre Bewerbung wurde erfolgreich übermittelt" …), a confirmation URL
+(`/confirmation`, `/thank-you`, `/success`, `/danke`, `/bestaetigung` …) or an explicit
+`data-application-submitted` marker. Then `SUCCESS`, with a safe summary (the recognized phrase
+only) and an application reference if one is shown ("Application ID: ABC-12345" — kept only if
+it looks like a reference). Nothing else from the page is kept. The browser stays open for the
+user (the session is `STOPPED` and the assistant no longer touches it).
+
+### 24.10 Human takeover and invalidation
+
+Human control still wins at every stage. `invalidation.invalidate` (guarded `UPDATE … WHERE
+status = 'ACTIVE' / 'AUTHORIZED'`, so it can never overwrite an authorization a submission just
+consumed) runs on: take-control, pause, stop, resume, every fill pass, a mapping change, a
+document choice or removal, a consent authorization or withdrawal, a navigation / reload / new
+window (page marker, checked on every session poll), another website, a security check or login,
+and a browser that is gone. Changes made elsewhere — an answer edited in the Questions section,
+a field typed in the browser, a re-worded consent — are caught by the hash, which is recomputed
+whenever the review is shown, at authorization, and immediately before the press. Nothing is
+re-authorized silently: the user reviews and authorizes again. Every review section links back
+to editing (answers, CV / Anschreiben, consents) and offers *Take control*.
+
+### 24.11 Audit trail and privacy
+
+`SubmissionAttempt` (`automation_submission_attempts`, append-only once finished — an ORM guard;
+only the user's one-time verification may be added) holds: user, application, session,
+authorization, final review, reviewed hash, destination site and URL (no query), `started_at`,
+`submit_triggered_at`, `finished_at`, result, confirmation reference and summary, failure code
+and reason, the user's verification. New events — `FINAL_REVIEW_CREATED`,
+`FINAL_REVIEW_INVALIDATED`, `CONSENT_AUTHORIZED`, `CONSENT_REVOKED`, `SUBMISSION_AUTHORIZED`,
+`SUBMISSION_AUTHORIZATION_INVALIDATED`, `SUBMISSION_STARTED`, `SUBMISSION_TRIGGERED`,
+`SUBMISSION_CONFIRMED`, `SUBMISSION_FAILED`, `SUBMISSION_UNKNOWN`,
+`SUBMISSION_VERIFIED_BY_USER` — carry codes and ids only. Never stored or logged: passwords,
+cookies, tokens, authorization headers, page content, or submitted values in events and logs
+(the reviewed values live only in the user's own `FinalReview` snapshot, as their answers
+already do). All V0.10 rules on URLs, private hosts, challenges and logins apply unchanged.
+
+**Application status.** A confirmed `SUCCESS` (or the user's "it was received") sets the
+application's existing `submitted` status — the only status change V0.11 makes. Tracking
+(interviews, follow-ups, offers, history) is V0.12.
+
+### 24.12 API (V0.11)
+
+```
+GET    /applications/{id}/automation/{sid}/final-review              the live state, latest review, authorization
+POST   /applications/{id}/automation/{sid}/final-review              {expected_state_hash}          201
+POST   /applications/{id}/automation/{sid}/consents/{fid}            {consent_text_hash, give?}     204
+DELETE /applications/{id}/automation/{sid}/consents/{fid}                                            204
+POST   /applications/{id}/automation/{sid}/submission-authorization  {final_review_id, reviewed_state_hash, confirm: true}  201
+GET    /applications/{id}/automation/{sid}/submission-authorization
+DELETE /applications/{id}/automation/{sid}/submission-authorization  withdraw an unused authorization 204
+POST   /applications/{id}/automation/{sid}/submit                    {authorization_id}             the attempt
+GET    /applications/{id}/automation/submissions                     the audit trail
+POST   /applications/{id}/automation/submissions/{aid}/verification  {outcome}                      after UNKNOWN
+```
+
+`409` codes include `REVIEW_BLOCKED` / `AUTHORIZATION_BLOCKED` (with `details.blockers`),
+`REVIEW_CHANGED`, `REVIEW_NOT_CURRENT`, `REVIEW_HASH_MISMATCH`, `STATE_CHANGED`,
+`ALREADY_AUTHORIZED`, `AUTHORIZATION_CONSUMED`, `AUTHORIZATION_INVALIDATED`,
+`AUTHORIZATION_EXPIRED`, `WRONG_SESSION`, `SUBMISSION_IN_PROGRESS`, `ALREADY_SUBMITTED`,
+`PREVIOUS_SUBMISSION_UNKNOWN`, `CONSENT_TEXT_CHANGED`. Another user's anything: `404`. The
+submission router is registered before the V0.10 router so `/automation/submissions` is not
+read as a session id.
+
+### 24.13 Frontend
+
+Inside the Browser assistant: **Final review** (`assistant/FinalReview.tsx`) — opened by the
+user, never automatically — with the six sections, per-consent *I give consent n* / *Withdraw*,
+*Edit answers*, *Change CV or Anschreiben*, *Review consents*, *Take control*, *Confirm final
+review*, then the authorization box (checkbox + **Authorize & Submit**), *Submitting...*, and
+the result (`assistant/SubmissionResult.tsx`): "Application submitted successfully" with
+company, position, time and reference; the unknown result with "JobPilot will NOT submit
+again automatically" and *Received by the employer* / *Not received*; or "could not be
+submitted — no submission was confirmed". `lib/api/submission.ts`, `lib/submission.ts`,
+`types/submission.ts`.
+
+### 24.14 Configuration, migration, tests
+
+| Variable | Default | |
+| --- | --- | --- |
+| `SUBMISSION_AUTHORIZATION_TTL_SECONDS` | `600` | An unused authorization expires. |
+| `SUBMISSION_RESULT_TIMEOUT_SECONDS` | `20` | How long to look for a confirmation before `SUBMISSION_UNKNOWN`. |
+
+Migration `c5f2a8e1d9b3` (`v0_11_review_and_submit`), purely additive: tables
+`automation_final_reviews`, `automation_consent_authorizations`,
+`automation_submission_authorizations`, `automation_submission_attempts`; enum types
+`final_review_status`, `submission_authorization_status`, `submission_result`; column
+`automation_fields.consent_text`. Composite ownership keys throughout; the exactly-once and
+pressed / not-pressed rules as constraints (§24.7–24.8). Verified: upgrade → downgrade →
+upgrade with realistic V0.10 data, `alembic check` clean (`tests/test_migrations.py`).
+
+| Area | Where |
+| --- | --- |
+| hash, final-button rules, confirmation evidence, permits, structure | `tests/test_submission_logic.py` |
+| review, consents, authorization, invalidation, submission, exactly once, results (real Chromium) | `tests/test_submission.py` |
+| migration roundtrip with V0.10 data | `tests/test_migrations.py` |
+| UI | `frontend/__tests__/FinalReview.test.tsx`, `BrowserAssistantSubmission.test.tsx` |
+| real Chromium end to end (happy path, no authorization, edit after review, missing consent, concurrent submits, ambiguous result) | `frontend/e2e/v11-review-and-submit.e2e.ts` |
+
+The fake employer site gained `/submit-apply` (really submits; the server confirms with a
+reference), `/submit-ambiguous` (never confirms) and `/submit-two-buttons`; every press of a
+final button and every received application is counted.
+
+### 24.15 V0.11 limitations
+
+- **Single page, single button.** The final review covers the page in front of the browser.
+  Multi-step forms are reviewed and submitted step by step only where the last step holds
+  the whole application; pressing "Next" is still never done by JobPilot.
+- **Recognition is heuristic.** Final-button captions and confirmation phrases are English and
+  German word lists; an unrecognized confirmation is honestly `SUBMISSION_UNKNOWN`, never a
+  guessed success. Sites that confirm only by email give `SUBMISSION_UNKNOWN`.
+- **Strictness has a cost.** Every field with a mapped question must be answered, typed, or
+  left unmapped; custom (ARIA) controls block; two plausible final buttons block. The user can
+  always submit by hand.
+- **Values outside the page.** The hash proves the page and JobPilot's records match the
+  review at the moment of the press; a site's own script changing a value *during* the press
+  cannot be ruled out (it would be the site's change, not JobPilot's).
+- **One process.** Like V0.10's browsers, the in-flight set used to tell a running attempt from
+  an interrupted one is process-local (sticky routing for several workers).
+- **Snapshot holds values.** The final review snapshot keeps the reviewed values (the user's own
+  data, like their answers) so the review stays exactly what they saw; events and logs never do.
+

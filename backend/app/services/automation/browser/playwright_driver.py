@@ -5,12 +5,16 @@ blocks the *calling* thread until that loop has answered. That keeps the web
 server's event loop free, works no matter which loop serves a request, and lets
 the automation logic stay plain synchronous code.
 
-What this module never does: click a button, submit a form, solve or work around
-a challenge, change the browser's fingerprint, rotate proxies or touch cookies.
-It starts an ordinary Chromium with an empty profile, opens the page it is given,
-reads it and writes into text controls, selects, radios, checkboxes and file
+What the page interface (`PlaywrightPage`) never does: click a button, submit a form,
+solve or work around a challenge, change the browser's fingerprint, rotate proxies or
+touch cookies. It starts an ordinary Chromium with an empty profile, opens the page it is
+given, reads it and writes into text controls, selects, radios, checkboxes and file
 inputs -- and only into those: every write first checks what kind of element the
 locator resolved to.
+
+V0.11 adds one separate capability, `PlaywrightFinalSubmission`: it presses the one final
+button a single-use `SubmitPermit` names, on the site the permit names, once -- and
+nothing else (see `browser/final_submit.py`).
 """
 
 import asyncio
@@ -32,6 +36,15 @@ from app.services.automation.browser.base import (
     PageSnapshot,
     RawControl,
     RawOption,
+)
+from app.services.automation.browser.final_submit import (
+    FinalSubmissionChannel,
+    OutcomeSignals,
+    PermitError,
+    SubmissionNotTriggered,
+    SubmitControl,
+    SubmitPermit,
+    SupportsFinalSubmission,
 )
 
 logger = get_logger(__name__)
@@ -318,7 +331,115 @@ class PlaywrightPage(BrowserPage):
         return self._session.is_alive()
 
 
-class PlaywrightSession(BrowserSession):
+class PlaywrightFinalSubmission(FinalSubmissionChannel):
+    """The final-submission capability of one Playwright session (V0.11).
+
+    `submit_final_application` is the only code in JobPilot that presses a button. It
+    takes a permit, never a selector: the button is found again from the permit's
+    description, must be the only element that matches it, must be a real button or
+    submit input on the expected host, enabled, and able to receive the press (a trial
+    press that changes nothing). Then it is pressed once. There is no retry here and none
+    above it."""
+
+    def __init__(self, session: "PlaywrightSession") -> None:
+        self._session = session
+
+    def find_final_controls(self) -> list[SubmitControl]:
+        async def run() -> list[dict[str, Any]]:
+            page = self._session.live_page()
+            return list(await page.evaluate(scripts.FINAL_CONTROLS_JS))
+
+        return [
+            SubmitControl(
+                label=str(c.get("label") or ""),
+                tag=str(c.get("tag") or ""),
+                type=str(c.get("type") or ""),
+                dom_id=c.get("dom_id"),
+                name=c.get("name"),
+                form_index=c.get("form_index"),
+                ordinal=int(c.get("ordinal", 0)),
+                disabled=bool(c.get("disabled")),
+            )
+            for c in self._session.run(run())
+        ]
+
+    def page_marker(self) -> str:
+        return self._session.page_marker()
+
+    def submit_final_application(self, permit: SubmitPermit) -> None:
+        if not isinstance(permit, SubmitPermit):
+            raise PermitError("A submit permit is required.")
+        permit.redeem()  # single use: a second call with the same permit raises here
+
+        async def run() -> None:
+            page = self._session.live_page()
+            from urllib.parse import urlsplit
+
+            host = (urlsplit(page.url).hostname or "").lower()
+            if host != permit.expected_host:
+                raise SubmissionNotTriggered("WRONG_DESTINATION", "The browser is on another site.")
+            handle = await page.evaluate_handle(
+                scripts.RESOLVE_FINAL_JS, {"control": permit.control.as_dict()}
+            )
+            element = handle.as_element()
+            if element is None:
+                await handle.dispose()
+                raise SubmissionNotTriggered(
+                    "SUBMIT_CONTROL_NOT_FOUND", "The final button is no longer on the page."
+                )
+            try:
+                info = dict(await element.evaluate(scripts.ELEMENT_KIND_JS))
+                pressable = (info["tag"] == "button" and permit.control.tag == "button") or (
+                    info["tag"] == "input" and info["type"] == "submit"
+                )
+                if not pressable:
+                    raise SubmissionNotTriggered(
+                        "NOT_A_SUBMIT_CONTROL", "That is not the final button."
+                    )
+                if info["disabled"]:
+                    raise SubmissionNotTriggered(
+                        "SUBMIT_CONTROL_DISABLED", "The final button is disabled."
+                    )
+                try:
+                    # Checks that the button is visible, stable, enabled and not covered --
+                    # without pressing it.
+                    await element.click(trial=True, timeout=_ACTION_TIMEOUT_MS)
+                except Exception:  # noqa: BLE001 - nothing was pressed
+                    raise SubmissionNotTriggered(
+                        "SUBMIT_CONTROL_NOT_READY", "The final button cannot be pressed."
+                    ) from None
+                # The one press. Whatever happens from here on, it may have been made.
+                await element.click(timeout=_ACTION_TIMEOUT_MS)
+            finally:
+                try:
+                    await element.dispose()
+                except Exception:  # noqa: BLE001 - the page may have navigated away
+                    pass
+
+        self._session.run(run())
+
+    def read_outcome(self) -> OutcomeSignals:
+        async def run() -> dict[str, Any]:
+            page = self._session.live_page()
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=3000)
+            except Exception:  # noqa: BLE001 - a page still loading is read as it is
+                pass
+            return dict(await page.evaluate(scripts.OUTCOME_JS))
+
+        data = self._session.run(run())
+        return OutcomeSignals(
+            url=str(data.get("url") or ""),
+            title=str(data.get("title") or ""),
+            text=str(data.get("text") or ""),
+            has_password=bool(data.get("has_password")),
+            challenge_markers=[str(m) for m in data.get("challenge_markers") or []],
+            reference_marker=data.get("reference_marker"),
+            success_marker=bool(data.get("success_marker")),
+        )
+
+
+class PlaywrightSession(BrowserSession, SupportsFinalSubmission):
     def __init__(
         self, *, browser: Any, context: Any, page: Any, headless: bool, allow_private: bool
     ) -> None:
@@ -330,6 +451,35 @@ class PlaywrightSession(BrowserSession):
         self._crashed = False
         self._closed = False
         self._api = PlaywrightPage(self)
+        self._final = PlaywrightFinalSubmission(self)
+        #: Page instances and navigations, for `page_marker` (V0.11).
+        self._page_numbers: dict[int, int] = {}
+        self._navigations = 0
+        self.watch_page(page)
+
+    # --- which page instance is this? (V0.11) --------------------------------------------------
+    def watch_page(self, page: Any) -> None:
+        """Count the page and every navigation of its main frame (a reload included)."""
+        self._page_numbers.setdefault(id(page), len(self._page_numbers) + 1)
+
+        def navigated(frame: Any) -> None:
+            if frame == page.main_frame:
+                self._navigations += 1
+
+        page.on("framenavigated", navigated)
+
+    def page_marker(self) -> str:
+        """Changes whenever the page the assistant works on is another one: a navigation,
+        a reload, a popup that took over. Equal markers mean the same page instance."""
+        try:
+            page = self.live_page()
+        except BrowserError:
+            return "closed"
+        number = self._page_numbers.get(id(page), 0)
+        return f"{number}:{self._navigations}"
+
+    def final_submission(self) -> FinalSubmissionChannel:
+        return self._final
 
     # Everything below runs on (or is marshalled to) the browser thread.
     def run(self, coroutine: Awaitable[T]) -> T:
@@ -477,6 +627,7 @@ class PlaywrightDriver(BrowserDriver):
                 session._crashed = True  # noqa: SLF001
 
             page.on("crash", lambda *_: on_crash())
+            context.on("page", session.watch_page)
             return session
 
         try:

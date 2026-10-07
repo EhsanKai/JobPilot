@@ -281,6 +281,9 @@ class AutomationField(Base, TimestampMixin):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     #: Why only the user can fill it: LEGAL_CONSENT, CUSTOM_CONTROL, READ_ONLY ...
     user_action_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    #: A legal confirmation / consent (V0.11): its exact text as the page shows it --
+    #: what the user authorizes. NULL for every other field.
+    consent_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- The mapping to an ApplicationQuestion ---------------------------------------------------
     mapping_status: Mapped[MappingStatus] = mapped_column(

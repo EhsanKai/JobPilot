@@ -1125,8 +1125,9 @@ def test_the_submit_button_is_recognized_but_never_pressed(
     session = ctx.session_now()
     assert session["submit_detected"] is True
     assert session["submit_notice"] == (
-        "The application appears ready for submission. V0.10 does not submit applications. "
-        "Please submit manually."
+        "The application appears ready for submission. Without your explicit authorization, "
+        "JobPilot does not submit applications. Please submit manually, or open Final review "
+        "to check everything and authorize JobPilot to submit it."
     )
     assert session["status"] in ("RUNNING", "COMPLETED")
 

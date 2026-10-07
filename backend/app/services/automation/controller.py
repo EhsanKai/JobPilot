@@ -22,6 +22,10 @@ The invariants this module enforces (and its tests pin):
   suggestion is never written. Legal confirmations and consents are never ticked.
 - **Stop at a challenge.** A CAPTCHA / security check or a login moves the session to
   BLOCKED and hands the browser to the user; nothing tries to get around it.
+- **Any change ends a final review (V0.11).** Taking control, pausing, stopping, resuming,
+  filling, a mapping or document decision, a navigation, another website: each invalidates
+  the session's final review and submission authorization (`invalidation.invalidate`).
+  Submitting itself is not here -- see `services.automation.submission`.
 """
 
 import uuid
@@ -52,7 +56,15 @@ from app.models.automation import (
 from app.models.user import User
 from app.schemas.automation import FillRequest, MappingRequest, ResumeRequest
 from app.services.applications.service import get_owned_application
-from app.services.automation import documents, filler, mapping, messages, safety
+from app.services.automation import (
+    documents,
+    filler,
+    invalidation,
+    mapping,
+    messages,
+    review,
+    safety,
+)
 from app.services.automation.browser.base import BrowserError, PageSnapshot
 from app.services.automation.discovery import DiscoveredField, discover_fields
 from app.services.automation.events import EventType
@@ -186,6 +198,7 @@ def _end_session(
     _set_status(
         db, session, S.FAILED if crashed else S.STOPPED, attention=None, error=(code, message)
     )
+    invalidation.invalidate(db, session, invalidation.BROWSER_GONE)
     record(
         db,
         session,
@@ -398,6 +411,7 @@ def _inspect(
     if not safety.host_in_scope(host, list(session.allowed_hosts)):
         _set_status(db, session, S.PAUSED, attention=messages.UNEXPECTED_DOMAIN)
         record(db, session, EventType.DOMAIN_CHANGED)
+        invalidation.invalidate(db, session, invalidation.DOMAIN_CHANGED)
         db.commit()
         return Inspection("paused")
 
@@ -405,11 +419,13 @@ def _inspect(
     if pending:
         _set_status(db, session, S.BLOCKED, attention=messages.SECURITY_CHALLENGE)
         record(db, session, EventType.SECURITY_CHALLENGE, markers=",".join(sorted(pending)))
+        invalidation.invalidate(db, session, messages.SECURITY_CHALLENGE)
         db.commit()
         return Inspection("blocked")
     if snapshot.signals.has_password:
         _set_status(db, session, S.BLOCKED, attention=messages.LOGIN_REQUIRED)
         record(db, session, EventType.LOGIN_REQUIRED)
+        invalidation.invalidate(db, session, messages.LOGIN_REQUIRED)
         db.commit()
         return Inspection("blocked")
 
@@ -529,6 +545,9 @@ def _copy_page_data(row: AutomationField, item: DiscoveredField, now: datetime) 
     row.present = True
     row.last_seen_at = now
     row.user_action_reason = item.user_action_reason
+    row.consent_text = (
+        review.consent_text_of(item) if item.user_action_reason == "LEGAL_CONSENT" else None
+    )
     row.detected_document_type = item.detected_document_type
     if item.user_action_reason is not None and row.fill_status is FillStatus.NOT_FILLED:
         row.fill_status = FillStatus.USER_ACTION_REQUIRED
@@ -643,6 +662,7 @@ def pause(
     _require(session, "pause")
     _set_status(db, session, S.PAUSED)
     record(db, session, EventType.AUTOMATION_PAUSED)
+    invalidation.invalidate(db, session, invalidation.PAUSED)
     db.commit()
     return session
 
@@ -656,6 +676,8 @@ def take_control(
     _require(session, "take_control")
     _set_status(db, session, S.USER_CONTROL)
     record(db, session, EventType.USER_TAKEOVER)
+    # Human control wins: whatever was reviewed or authorized is no longer what will be sent.
+    invalidation.invalidate(db, session, invalidation.USER_TAKEOVER)
     db.commit()
     return session
 
@@ -672,6 +694,7 @@ def stop(
     _require(session, "stop")
     _set_status(db, session, S.STOPPED, attention=None)
     record(db, session, EventType.AUTOMATION_STOPPED, closed=close_browser)
+    invalidation.invalidate(db, session, invalidation.STOPPED)
     db.commit()
     live = registry.peek(session.id)
     if live is not None:
@@ -717,6 +740,7 @@ def resume(
             session.acknowledged_markers = sorted(known)
         _set_status(db, session, S.RUNNING, attention=None)
         record(db, session, EventType.AUTOMATION_RESUMED)
+        invalidation.invalidate(db, session, invalidation.RESUMED)
         db.commit()
         inspection = _inspect(db, user, application, session, live, provider)
         if inspection.outcome == "running":
@@ -753,6 +777,7 @@ def confirm_domain(
         session.allowed_hosts = [*session.allowed_hosts, current]
     session.attention_code = None
     record(db, session, EventType.DOMAIN_CONFIRMED)
+    invalidation.invalidate(db, session, invalidation.DOMAIN_CHANGED)
     db.commit()
     return resume(db, user, application_id, session_id, ResumeRequest(), provider)
 
@@ -849,7 +874,9 @@ def fill(
         _require(session, "work")
         if session.status is S.COMPLETED:
             _set_status(db, session, S.RUNNING)
-            db.commit()
+        # A fill pass may change what would be submitted.
+        invalidation.invalidate(db, session, invalidation.FILL)
+        db.commit()
         _fill(db, user, application, session, live, provider, request or FillRequest())
         _settle(db, user, application, session)
     return session
@@ -1231,7 +1258,17 @@ def refresh(db: Session, user: User, session: AutomationSession) -> None:
     ):
         _set_status(db, session, S.PAUSED, attention=messages.UNEXPECTED_DOMAIN)
         record(db, session, EventType.DOMAIN_CHANGED)
+        invalidation.invalidate(db, session, invalidation.DOMAIN_CHANGED)
         changed = True
+    # V0.11: a navigation or reload since the final review means the reviewed page is gone.
+    channel = review.channel_of(live)
+    if channel is not None:
+        try:
+            marker = channel.page_marker()
+        except BrowserError:
+            marker = ""
+        if invalidation.invalidate_if_navigated(db, session, marker):
+            changed = True
     if changed:
         db.commit()
 
@@ -1374,6 +1411,7 @@ def set_mapping(
         db.flush()
         _discard_if_orphan(db, application.id, previous)
     record(db, session, EventType.MAPPING_CHANGED, row.id, action=request.action)
+    invalidation.invalidate(db, session, invalidation.MAPPING_CHANGED)
     db.commit()
     return row
 
@@ -1408,6 +1446,7 @@ def set_document(
         row.fill_status = FillStatus.NOT_FILLED
         row.fill_error_code = None
     record(db, session, EventType.DOCUMENT_SELECTED, row.id, document_type=choice.type)
+    invalidation.invalidate(db, session, invalidation.DOCUMENT_CHANGED)
     db.commit()
     return row
 
@@ -1420,6 +1459,7 @@ def clear_document(
     row.document_type = None
     row.document_id = None
     row.document_confirmed = False
+    invalidation.invalidate(db, session, invalidation.DOCUMENT_CHANGED)
     db.commit()
     return row
 

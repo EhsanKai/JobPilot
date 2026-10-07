@@ -10,6 +10,7 @@
     V0.7 data  -> upgrade -> downgrade -> upgrade    (V0.8 roundtrip, tailored documents)
     V0.8 data  -> upgrade -> downgrade -> upgrade    (V0.9 roundtrip, questions and document origin)
     V0.9 data  -> upgrade -> downgrade -> upgrade    (V0.10 roundtrip, browser automation)
+    V0.10 data -> upgrade -> downgrade -> upgrade    (V0.11 roundtrip, review & submit)
 
 The test suite itself builds its schema with `create_all`; these tests make
 sure the migrations produce the same schema and preserve existing data. They
@@ -1796,6 +1797,225 @@ def test_v010_downgrade_restores_the_v09_schema_and_data_exactly(migration_db: E
     command.upgrade(config, "head")
     assert_v010_schema(migration_db)
     assert data_fingerprints(migration_db, v09_tables) == data_before
+    with migration_db.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == []
+
+
+# --- V0.11: review & submit (additive: reviews, consents, authorizations, attempts) ---------
+
+V011 = "c5f2a8e1d9b3"
+V011_TABLES = {
+    "automation_final_reviews",
+    "automation_consent_authorizations",
+    "automation_submission_authorizations",
+    "automation_submission_attempts",
+}
+V011_ENUMS = {
+    "final_review_status": ["ACTIVE", "INVALIDATED", "SUPERSEDED", "USED"],
+    "submission_authorization_status": ["AUTHORIZED", "CONSUMED", "EXPIRED", "INVALIDATED"],
+    "submission_result": ["SUCCESS", "FAILED_BEFORE_SUBMIT", "SUBMISSION_UNKNOWN"],
+}
+FIELD_ID = uuid.UUID("00000000-0000-4000-8000-0000000000f2")
+REVIEW_ID = uuid.UUID("00000000-0000-4000-8000-0000000000f3")
+AUTHORIZATION_ID = uuid.UUID("00000000-0000-4000-8000-0000000000f4")
+HASH = "a" * 64
+
+
+def build_v010_database(engine: Engine, config: Config) -> None:
+    """A V0.10 database with a browser session, a discovered (consent) field and events on
+    top of the V0.9 data of `build_v09_database`."""
+    build_v09_database(engine, config)
+    command.upgrade(config, V010)
+    insert_session(engine)
+    execute(
+        engine,
+        "INSERT INTO automation_fields (id, session_id, user_id, field_key, position, "
+        "input_type, label, required, meta, locator, present, first_seen_at, last_seen_at, "
+        "mapping_status, document_confirmed, fill_status, user_action_reason) "
+        "VALUES (:id, :s, :u, 'field:id:privacy', 0, 'checkbox', 'I agree', true, "
+        "'{}'::jsonb, '{}'::jsonb, true, now(), now(), 'UNMAPPED', false, "
+        "'USER_ACTION_REQUIRED', 'LEGAL_CONSENT')",
+        id=FIELD_ID, s=SESSION_ID, u=USER_ID,
+    )
+    execute(
+        engine,
+        "INSERT INTO automation_events (id, session_id, user_id, event_type, data) "
+        "VALUES (gen_random_uuid(), :s, :u, 'SUBMIT_DETECTED', '{}'::jsonb)",
+        s=SESSION_ID, u=USER_ID,
+    )
+
+
+def column_fingerprint(engine: Engine, table: str, columns: list[str]) -> tuple[int, str | None]:
+    listed = ", ".join(f'"{c}"' for c in columns)
+    row = rows(
+        engine,
+        f"SELECT count(*) AS n, md5(string_agg(t::text, '|' ORDER BY t::text)) AS h "
+        f'FROM (SELECT {listed} FROM "{table}") AS t',
+    )[0]
+    return row["n"], row["h"]
+
+
+def columns_of(engine: Engine, table: str) -> list[str]:
+    return [
+        r["column_name"]
+        for r in rows(
+            engine,
+            "SELECT column_name FROM information_schema.columns WHERE table_name = :t "
+            "ORDER BY ordinal_position",
+            t=table,
+        )
+    ]
+
+
+def insert_review(engine: Engine, **overrides: Any) -> None:
+    values: dict[str, Any] = {"id": REVIEW_ID, "status": "ACTIVE", "user": USER_ID}
+    values.update(overrides)
+    execute(
+        engine,
+        "INSERT INTO automation_final_reviews (id, user_id, application_id, session_id, "
+        "schema_version, state_hash, destination_host, destination_domain, destination_url, "
+        "page_marker, snapshot, status) VALUES (:id, :user, :a, :s, 1, :h, 'example.com', "
+        "'example.com', 'https://example.com/apply', '1:1', '{}'::jsonb, "
+        "CAST(:status AS final_review_status))",
+        a=APPLICATION_ID, s=SESSION_ID, h=HASH, **values,
+    )
+
+
+def insert_authorization(engine: Engine, **overrides: Any) -> None:
+    values: dict[str, Any] = {"id": AUTHORIZATION_ID, "review": REVIEW_ID, "status": "AUTHORIZED"}
+    values.update(overrides)
+    consumed = "now()" if values["status"] == "CONSUMED" else "NULL"
+    execute(
+        engine,
+        "INSERT INTO automation_submission_authorizations (id, user_id, application_id, "
+        "session_id, final_review_id, reviewed_state_hash, destination_host, status, "
+        "created_at, expires_at, consumed_at) VALUES (:id, :u, :a, :s, :review, :h, "
+        "'example.com', CAST(:status AS submission_authorization_status), now(), "
+        f"now() + interval '10 minutes', {consumed})",
+        u=USER_ID, a=APPLICATION_ID, s=SESSION_ID, h=HASH, **values,
+    )
+
+
+def insert_attempt(
+    engine: Engine, *, result: str | None, triggered: bool, **overrides: Any
+) -> None:
+    values: dict[str, Any] = {"id": uuid.uuid4(), "authorization": AUTHORIZATION_ID}
+    values.update(overrides)
+    finished = "now()" if result else "NULL"
+    pressed = "now()" if triggered else "NULL"
+    result_sql = f"CAST('{result}' AS submission_result)" if result else "NULL"
+    execute(
+        engine,
+        "INSERT INTO automation_submission_attempts (id, user_id, application_id, session_id, "
+        "authorization_id, final_review_id, reviewed_state_hash, destination_domain, "
+        "destination_url, started_at, submit_triggered_at, finished_at, result) "
+        "VALUES (:id, :u, :a, :s, :authorization, :r, :h, 'example.com', "
+        f"'https://example.com/apply', now(), {pressed}, {finished}, {result_sql})",
+        u=USER_ID, a=APPLICATION_ID, s=SESSION_ID, r=REVIEW_ID, h=HASH, **values,
+    )
+
+
+def test_v010_data_survives_v011_upgrade_downgrade_upgrade(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v010_database(migration_db, config)
+
+    v010_tables = user_tables(migration_db)
+    assert not (V011_TABLES & v010_tables)
+    unchanged = v010_tables - {"automation_fields"}
+    data_before = data_fingerprints(migration_db, unchanged)
+    field_columns = columns_of(migration_db, "automation_fields")
+    fields_before = column_fingerprint(migration_db, "automation_fields", field_columns)
+    schema_before = schema_fingerprint(migration_db, unchanged)
+    enums_before = enum_values(migration_db)
+    assert fields_before[0] == 1
+
+    # V0.10 -> V0.11: purely additive. Nothing that exists changes.
+    command.upgrade(config, V011)
+    assert user_tables(migration_db) == v010_tables | V011_TABLES
+    enums = enum_values(migration_db)
+    for name, values in V011_ENUMS.items():
+        assert enums[name] == values, name
+    assert {k: v for k, v in enums.items() if k not in V011_ENUMS} == enums_before
+    assert data_fingerprints(migration_db, unchanged) == data_before
+    assert schema_fingerprint(migration_db, unchanged) == schema_before
+    assert column_fingerprint(migration_db, "automation_fields", field_columns) == fields_before
+    assert columns_of(migration_db, "automation_fields") == [*field_columns, "consent_text"]
+    assert rows(migration_db, "SELECT consent_text FROM automation_fields") == [
+        {"consent_text": None}
+    ]
+
+    # The new tables work against migrated V0.10 sessions and fields ...
+    insert_review(migration_db)
+    execute(
+        migration_db,
+        "INSERT INTO automation_consent_authorizations (id, user_id, session_id, field_id, "
+        "field_key, consent_text, consent_text_hash) VALUES (gen_random_uuid(), :u, :s, :f, "
+        "'field:id:privacy', 'I agree', :h)",
+        u=USER_ID, s=SESSION_ID, f=FIELD_ID, h=HASH,
+    )
+    insert_authorization(migration_db)
+    # ... and enforce what they promise: one current review per session,
+    with pytest.raises(Exception, match="uq_automation_final_reviews_one_active"):
+        insert_review(migration_db, id=uuid.uuid4())
+    # nothing for someone else's session,
+    with pytest.raises(Exception, match="fk_automation_final_reviews_(application|session)"):
+        insert_review(migration_db, id=uuid.uuid4(), status="SUPERSEDED", user=uuid.uuid4())
+    # one open authorization per application, one per review,
+    insert_review(migration_db, id=uuid.UUID(int=7), status="SUPERSEDED")
+    with pytest.raises(Exception, match="uq_automation_submission_authorizations_one_open"):
+        insert_authorization(migration_db, id=uuid.uuid4(), review=uuid.UUID(int=7))
+    with pytest.raises(Exception, match="uq_automation_submission_authorizations_review"):
+        insert_authorization(migration_db, id=uuid.uuid4(), status="EXPIRED")
+    # a CONSUMED status needs its time,
+    with pytest.raises(Exception, match="ck_automation_submission_authorizations_consumed"):
+        execute(
+            migration_db,
+            "UPDATE automation_submission_authorizations SET status = 'CONSUMED' WHERE id = :id",
+            id=AUTHORIZATION_ID,
+        )
+    # a success or unknown result always has a press, a failure before submit never,
+    with pytest.raises(Exception, match="ck_automation_submission_attempts_pressed"):
+        insert_attempt(migration_db, result="SUCCESS", triggered=False)
+    with pytest.raises(Exception, match="ck_automation_submission_attempts_failed_not_pressed"):
+        insert_attempt(migration_db, result="FAILED_BEFORE_SUBMIT", triggered=True)
+    # and exactly one attempt per authorization, one running per application.
+    insert_attempt(migration_db, result=None, triggered=True)
+    with pytest.raises(Exception, match="uq_automation_submission_attempts_one_running"):
+        insert_attempt(migration_db, result=None, triggered=False, authorization=uuid.uuid4())
+    with pytest.raises(Exception, match="uq_automation_submission_attempts_authorization"):
+        insert_attempt(migration_db, result="SUBMISSION_UNKNOWN", triggered=True)
+    # Deleting the application removes all of it.
+    execute(migration_db, "DELETE FROM applications WHERE id = :id", id=APPLICATION_ID)
+    for table in V011_TABLES:
+        assert rows(migration_db, f'SELECT count(*) AS n FROM "{table}"') == [{"n": 0}]
+
+
+def test_v011_downgrade_restores_the_v010_schema_and_data_exactly(migration_db: Engine) -> None:
+    config = alembic_config()
+    build_v010_database(migration_db, config)
+    v010_tables = user_tables(migration_db)
+    data_before = data_fingerprints(migration_db, v010_tables)
+    schema_before = schema_fingerprint(migration_db, v010_tables)
+    enums_before = enum_values(migration_db)
+
+    command.upgrade(config, V011)
+    insert_review(migration_db)  # V0.11-only data: lost on downgrade, by design
+    insert_authorization(migration_db, status="CONSUMED")
+    insert_attempt(migration_db, result="SUCCESS", triggered=True)
+    command.downgrade(config, V010)
+
+    assert user_tables(migration_db) == v010_tables
+    assert schema_fingerprint(migration_db, v010_tables) == schema_before
+    assert enum_values(migration_db) == enums_before
+    assert data_fingerprints(migration_db, v010_tables) == data_before
+
+    # and upgrading again works, with the schema exactly what the models declare
+    command.upgrade(config, "head")
+    assert V011_TABLES <= user_tables(migration_db)
+    assert data_fingerprints(migration_db, v010_tables - {"automation_fields"}) == {
+        k: v for k, v in data_before.items() if k != "automation_fields"
+    }
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == []

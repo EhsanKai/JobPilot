@@ -1,7 +1,11 @@
 """Safety rules of the browser assistant (V0.10): which pages it may open, what it
 must never touch, and what it must hand back to the user.
 
-    SUBMIT_ACTIONS_ALLOWED = False    V0.10 never submits an application
+    SUBMIT_ACTIONS_ALLOWED = False    the fill assistant (V0.10) never submits an application
+
+V0.11 keeps that flag False. Submitting is a separate capability with its own guard
+(`services.automation.submission`): these rules only say which button it would press
+(`final_controls`) and what counts as proof that it worked (`confirmation_of`).
 
 Everything here is deterministic and testable without a browser.
 """
@@ -10,15 +14,19 @@ import ipaddress
 import re
 import socket
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Final
 from urllib.parse import urlsplit
 
 from app.services.automation.browser.base import PageSnapshot
+from app.services.automation.browser.final_submit import OutcomeSignals, SubmitControl
 from app.services.job_discovery.normalization.text import fold
 
-#: V0.10 never submits an application. The browser interface has no way to press a
-#: button at all; this flag is the explicit, documented guard the controller checks
-#: before it would act on anything that looks like a final action (and a test pins it).
+#: The fill assistant never submits an application. The fill interface (`BrowserPage`) has
+#: no way to press a button at all; this flag is the explicit, documented guard the
+#: controller checks before it would act on anything that looks like a final action (and a
+#: test pins it). V0.11 does NOT change it: submission is a separate, permit-gated
+#: capability (`browser/final_submit.py`, `services/automation/submission.py`).
 SUBMIT_ACTIONS_ALLOWED: Final = False
 
 MAX_URL_CHARS = 2000
@@ -287,3 +295,114 @@ def pending_markers(snapshot: PageSnapshot, acknowledged: list[str]) -> list[str
         for marker in snapshot.signals.challenge_markers
         if marker in GATE_MARKERS or marker not in acknowledged
     ]
+
+
+# --- V0.11: which button is *the* final action? --------------------------------------------------
+#
+# `SUBMIT_ACTIONS_ALLOWED` above stays False: the fill assistant never submits. Submission is a
+# separate, authorized capability (`services.automation.submission`); these rules only decide
+# which button it would press -- and refuse when that is not perfectly clear.
+
+
+@dataclass(frozen=True)
+class FinalControlVerdict:
+    #: The one final button, when there is exactly one and it can be pressed.
+    control: SubmitControl | None
+    #: NO_SUBMIT_CONTROL, MULTIPLE_SUBMIT_CONTROLS, SUBMIT_CONTROL_NOT_PRESSABLE, or None.
+    problem: str | None
+    candidates: list[SubmitControl]
+
+
+def final_controls(controls: list[SubmitControl]) -> FinalControlVerdict:
+    """The final submission button of a page -- only when it is unambiguous.
+
+    A caption is only a *candidate* signal ("Submit application", "Bewerbung absenden",
+    "Jetzt bewerben" ...); `type=submit` alone is none. Two plausible final actions (say a
+    header "Apply" link and the form's "Submit") are ambiguous: blocked, for the user."""
+    candidates = [c for c in controls if not c.disabled and is_submission_label(c.label)]
+    distinct: dict[tuple[str, str, int], SubmitControl] = {}
+    for control in candidates:
+        distinct.setdefault((control.label.lower(), control.tag, control.ordinal), control)
+    found = list(distinct.values())
+    if not found:
+        return FinalControlVerdict(None, "NO_SUBMIT_CONTROL", [])
+    if len(found) > 1:
+        return FinalControlVerdict(None, "MULTIPLE_SUBMIT_CONTROLS", found)
+    only = found[0]
+    pressable = only.tag == "button" or (only.tag == "input" and only.type == "submit")
+    if not pressable:
+        return FinalControlVerdict(None, "SUBMIT_CONTROL_NOT_PRESSABLE", found)
+    return FinalControlVerdict(only, None, found)
+
+
+# --- V0.11: did the page confirm the submission? -------------------------------------------------
+
+_CONFIRMATION = re.compile(
+    r"(your application (has been|was|is) (successfully )?(submitted|received|sent|complete)"
+    r"|application (successfully )?(submitted|received)"
+    r"|thank you for (your application|applying)"
+    r"|thanks for (your application|applying)"
+    r"|we (have|ve) received your application"
+    r"|you have successfully applied|successfully applied"
+    r"|vielen dank fur ihre bewerbung|danke fur ihre bewerbung"
+    r"|ihre bewerbung (wurde|ist) (erfolgreich )?"
+    r"(eingegangen|ubermittelt|versendet|versandt|eingereicht|abgeschickt|abgesendet)"
+    r"|bewerbung erfolgreich (ubermittelt|eingereicht|versendet|abgeschickt|abgesendet))"
+)
+_CONFIRMATION_PATH = re.compile(
+    r"/(confirmation|confirmed|thank-?you|thanks|success|submitted|application-received|"
+    r"danke|bestaetigung|bestatigung|erfolg)(/|$|\.)"
+)
+_REFERENCE = re.compile(
+    r"(?:application (?:id|number|no\.?|reference)|reference (?:number|no\.?|code)|"
+    r"bewerbungs-?(?:nummer|id)|referenz-?nummer|vorgangsnummer|kennziffer)"
+    r"\s*[:#]?\s*([A-Za-z0-9][A-Za-z0-9\-_/]{3,40})",
+    re.IGNORECASE,
+)
+_SAFE_REFERENCE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_/]{3,40}$")
+
+
+@dataclass(frozen=True)
+class Confirmation:
+    confirmed: bool
+    #: The recognized confirmation phrase (normalized: lower case, no accents; bounded) --
+    #: never more of the page.
+    summary: str | None = None
+    reference: str | None = None
+    #: Which evidence: TEXT, URL, MARKER.
+    evidence: str | None = None
+
+
+def _phrase(text: str) -> str | None:
+    folded = fold(text)
+    match = _CONFIRMATION.search(folded)
+    if match is None:
+        return None
+    return match.group(0)[:200]
+
+
+def confirmation_of(after: OutcomeSignals, before: OutcomeSignals | None) -> Confirmation:
+    """Evidence that the application was submitted -- a click is not evidence.
+
+    Accepted: a known success marker, a recognized confirmation phrase, or a confirmation
+    URL, that the page did NOT already show before the press (a FAQ "thank you for
+    applying" is no confirmation). The summary is the recognized phrase only; the
+    reference only when it looks like one. Nothing else from the page is kept."""
+    reference = None
+    if after.reference_marker and _SAFE_REFERENCE.match(after.reference_marker.strip()):
+        reference = after.reference_marker.strip()
+    else:
+        found = _REFERENCE.search(after.text)
+        if found and (before is None or found.group(1) not in before.text):
+            reference = found.group(1)
+    phrase = _phrase(f"{after.title} {after.text}")
+    before_phrase = _phrase(f"{before.title} {before.text}") if before is not None else None
+    path = urlsplit(after.url).path.lower() if after.url else ""
+    before_path = urlsplit(before.url).path.lower() if before is not None and before.url else ""
+    if after.success_marker and not (before is not None and before.success_marker):
+        return Confirmation(True, phrase, reference, "MARKER")
+    if phrase is not None and phrase != before_phrase:
+        return Confirmation(True, phrase, reference, "TEXT")
+    if _CONFIRMATION_PATH.search(path) and path != before_path:
+        return Confirmation(True, phrase, reference, "URL")
+    return Confirmation(False, None, None, None)

@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     # Fields read from one page; more is "not a form JobPilot understands".
     AUTOMATION_MAX_FIELDS: int = 300
 
+    # Review & submit (V0.11). Submission is a separate capability: it needs a
+    # final review the user confirmed and a fresh, explicit authorization.
+    # An authorization expires if it is not used within this time.
+    SUBMISSION_AUTHORIZATION_TTL_SECONDS: int = 600
+    # How long JobPilot watches the page for a confirmation after it pressed the
+    # final button. Without one the result is SUBMISSION_UNKNOWN -- never a retry.
+    SUBMISSION_RESULT_TIMEOUT_SECONDS: float = 20.0
+
     @property
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.BACKEND_CORS_ORIGINS.split(",") if origin.strip()]

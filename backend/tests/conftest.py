@@ -183,7 +183,9 @@ def automation_env(
     registry.set_driver_factory(None)
     fake_site.submissions.clear()
     fake_site.page_loads.clear()
+    fake_site.received.clear()
     yield fake_site
     registry.shutdown()
     registry.set_driver_factory(None)
     fake_site.submissions.clear()
+    fake_site.received.clear()

@@ -398,3 +398,95 @@ ELEMENT_KIND_JS = r"""(el) => {
   const type = tag === 'input' ? (el.getAttribute('type') || 'text').toLowerCase() : null;
   return { tag, type, readonly: !!el.readOnly, disabled: !!el.disabled };
 }"""
+
+
+# --- V0.11: the final-submission channel ---------------------------------------------------------
+#
+# Buttons are enumerated by one function so that the button the user reviewed is found again
+# by exactly the enumeration that listed it. These scripts read; the one press happens in
+# Python (`PlaywrightFinalSubmission.submit_final_application`) on the element RESOLVE_FINAL_JS
+# returns, after the Python side has checked what that element is.
+
+_BUTTONS = r"""
+const finalCandidates = () => {
+  const out = [];
+  const els = [];
+  const nodes = document.querySelectorAll(
+    'button, input[type=submit], input[type=image], [role=button], a.button, a.btn'
+  );
+  for (const n of nodes) {
+    if (!isRendered(n)) continue;
+    if (n.closest('form[role=search], [role=search]')) continue;
+    const tag = n.tagName.toLowerCase();
+    const isInput = tag === 'input';
+    const label = trunc(norm(isInput ? (n.value || n.getAttribute('alt') || '') : (n.getAttribute('aria-label') || n.textContent)), 120);
+    if (!label) continue;
+    const type = isInput ? (n.getAttribute('type') || 'submit').toLowerCase()
+      : tag === 'button' ? (n.getAttribute('type') || 'submit').toLowerCase() : 'link';
+    const f = n.form || n.closest('form');
+    const formIndex = f ? formsList.indexOf(f) : -1;
+    out.push({
+      label, tag: isInput ? 'input' : (tag === 'button' ? 'button' : tag), type,
+      dom_id: n.id && !unstableId(n.id) ? n.id : null,
+      name: n.getAttribute('name') || null,
+      form_index: formIndex >= 0 ? formIndex : null,
+      disabled: !!n.disabled || n.getAttribute('aria-disabled') === 'true',
+    });
+    els.push(n);
+    if (out.length >= 80) break;
+  }
+  const counts = new Map();
+  for (const c of out) {
+    const key = c.label.toLowerCase();
+    c.ordinal = counts.get(key) || 0;
+    counts.set(key, c.ordinal + 1);
+  }
+  return { controls: out, elements: els };
+};
+"""
+
+FINAL_CONTROLS_JS = "() => {" + _COLLECT + _BUTTONS + "\n  return finalCandidates().controls;\n}"
+
+RESOLVE_FINAL_JS = (
+    "(args) => {"
+    + _COLLECT
+    + _BUTTONS
+    + r"""
+  const want = args.control;
+  const { controls, elements } = finalCandidates();
+  const same = (c) => c.tag === want.tag && c.label.toLowerCase() === (want.label || '').toLowerCase();
+  let index = -1;
+  if (want.dom_id) index = controls.findIndex((c) => c.dom_id === want.dom_id && same(c));
+  if (index < 0 && !want.dom_id) {
+    const matches = [];
+    controls.forEach((c, i) => {
+      if (!same(c)) return;
+      if ((want.name || null) !== (c.name || null)) return;
+      if ((want.form_index ?? null) !== (c.form_index ?? null)) return;
+      matches.push(i);
+    });
+    const exact = matches.find((i) => controls[i].ordinal === want.ordinal);
+    if (exact !== undefined) index = exact;
+  }
+  return index < 0 ? null : elements[index];
+}"""
+)
+
+OUTCOME_JS = (
+    "() => {"
+    + _COLLECT
+    + _SIGNALS
+    + r"""
+  const { password } = collect();
+  const ref = document.querySelector('[data-application-reference]');
+  return {
+    url: location.href,
+    title: trunc(norm(document.title), 300),
+    text: trunc(norm(document.body ? document.body.innerText : ''), 6000),
+    has_password: password,
+    challenge_markers: challengeMarkers(),
+    reference_marker: ref ? trunc(norm(ref.getAttribute('data-application-reference') || ref.textContent), 80) : null,
+    success_marker: !!document.querySelector('[data-application-submitted]'),
+  };
+}"""
+)
