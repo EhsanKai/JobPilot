@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.models.mixins import TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.application import Application
     from app.models.job import Job
     from app.models.user import User
 
@@ -21,14 +22,19 @@ class UserJob(Base, TimestampMixin):
     the user saves it. It is also the visibility boundary: a user can only
     list and open jobs they have a `UserJob` row for.
 
-    V0.3 only tracks discovery and the saved flag. Application status
-    (Applied / Interview / Rejected / No Response / Offer ...) is meant to
-    hang off this row (or the existing `applications` table) in a later
-    version, so the canonical `Job` never needs per-user columns.
+    V0.3 tracks discovery and the saved flag, V0.6 hangs the user's match
+    result off this row (by user and job), and V0.7 adds the user's
+    `Application`: at most one per UserJob, created only when the user
+    explicitly starts it. The canonical `Job` never needs per-user columns.
     """
 
     __tablename__ = "user_jobs"
-    __table_args__ = (UniqueConstraint("user_id", "job_id", name="uq_user_jobs_user_job"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "job_id", name="uq_user_jobs_user_job"),
+        # Target of applications' composite foreign key: an application can
+        # only reference a UserJob of its own user (V0.7).
+        UniqueConstraint("id", "user_id", name="uq_user_jobs_id_user"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -51,3 +57,10 @@ class UserJob(Base, TimestampMixin):
 
     user: Mapped["User"] = relationship(back_populates="user_jobs")
     job: Mapped["Job"] = relationship(back_populates="user_jobs")
+    application: Mapped["Application | None"] = relationship(
+        back_populates="user_job",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        overlaps="applications,user",
+    )

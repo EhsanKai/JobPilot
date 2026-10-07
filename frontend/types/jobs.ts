@@ -1,3 +1,4 @@
+import type { ApplicationRef } from "@/types/application";
 import type { MatchSummary } from "@/types/match";
 import type { EmploymentType, RemotePreference } from "@/types/preferences";
 
@@ -65,6 +66,8 @@ export interface JobSummary {
   saved_at: string | null;
   /** Your match for this job (V0.6); null when none was calculated. */
   match?: MatchSummary | null;
+  /** Your application for this job (V0.7); null until you start one. */
+  application?: ApplicationRef | null;
 }
 
 export type PostingStatus = "active" | "stale" | "inactive";

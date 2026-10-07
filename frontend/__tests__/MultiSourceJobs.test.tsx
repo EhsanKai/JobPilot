@@ -16,6 +16,13 @@ vi.mock("@/lib/api/jobs", () => ({
   unsaveJob: vi.fn(),
 }));
 
+// The application card (V0.7) navigates to the workspace; it has its own
+// tests (ApplicationStart.test.tsx).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+}));
+vi.mock("@/lib/api/applications", () => ({ startApplication: vi.fn() }));
+
 const GREENHOUSE_URL = "https://job-boards.greenhouse.io/example/jobs/7001";
 const LEVER_URL = "https://jobs.lever.co/example/c0ffee";
 

@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { MatchBadge } from "@/components/jobs/MatchBadge";
 import { Button } from "@/components/ui/Button";
+import { APPLICATION_STATUS_LABELS } from "@/lib/applications";
 import {
   EMPLOYMENT_TYPE_LABELS,
   WORK_MODEL_LABELS,
@@ -51,6 +52,14 @@ export function JobCard({ job, isSaving = false, onToggleSave }: JobCardProps) {
             <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
               No longer listed
             </span>
+          )}
+          {job.application && (
+            <Link
+              href={`/applications/${job.application.id}`}
+              className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 hover:underline"
+            >
+              Application: {APPLICATION_STATUS_LABELS[job.application.status]}
+            </Link>
           )}
           <span
             className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600"

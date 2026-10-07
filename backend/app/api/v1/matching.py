@@ -10,9 +10,8 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.ai.factory import get_ai_provider
 from app.ai.provider import AIProvider
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_user_ai_provider
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.matching import (
@@ -64,7 +63,7 @@ async def explain_match(
     job_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> AIExplanationRead:
     """An AI-written explanation of your current match, validated against
     the deterministic result before it is stored. Generated once, then

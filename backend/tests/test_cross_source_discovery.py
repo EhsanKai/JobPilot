@@ -336,7 +336,9 @@ def test_existing_application_still_points_at_the_canonical_job_after_merging(
     discover(client, auth, {"sources": ["greenhouse"]})
     job = db_session.execute(select(Job)).scalar_one()
     user = db_session.execute(select(User)).scalar_one()
-    application = Application(user_id=user.id, job_id=job.id)
+    # Since V0.7 an application belongs to the user's UserJob for the job.
+    user_job = db_session.execute(select(UserJob)).scalar_one()
+    application = Application(user_id=user.id, user_job_id=user_job.id, job_id=job.id)
     db_session.add(application)
     db_session.commit()
     created_at = application.created_at
@@ -346,8 +348,9 @@ def test_existing_application_still_points_at_the_canonical_job_after_merging(
     application = db_session.get(Application, application.id)
     assert application is not None
     assert application.job_id == job.id
+    assert application.user_job_id == user_job.id
     assert application.created_at == created_at
-    assert application.status.value == "draft"
+    assert application.status.value == "PREPARING"
     assert count(db_session, Job) == 1
     assert count(db_session, JobSourcePosting) == 2
 

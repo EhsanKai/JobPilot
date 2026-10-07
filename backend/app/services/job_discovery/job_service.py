@@ -36,6 +36,7 @@ from app.schemas.jobs import (
     JobSummaryRead,
     PostingStatus,
 )
+from app.services.applications.refs import application_refs
 from app.services.job_discovery.deduplication.merger import order_postings
 from app.services.matching import status as match_status
 
@@ -182,6 +183,7 @@ def to_detail(
 def detail(db: Session, user: User, job: Job, user_job: UserJob) -> JobDetailRead:
     result = to_detail(job, user_job, latest_run_coverage(db, user))
     result.match = match_status.summaries(db, user, [job]).get(job.id)
+    result.application = application_refs(db, user, [job.id]).get(job.id)
     return result
 
 
@@ -279,8 +281,10 @@ def list_jobs(
 
     items = [to_summary(job, user_job) for job, user_job in rows]
     matches = match_status.summaries(db, user, [job for job, _ in rows])
+    applications = application_refs(db, user, [job.id for job, _ in rows])
     for item in items:
         item.match = matches.get(item.id)
+        item.application = applications.get(item.id)
     return JobListResponse(
         items=items,
         total=total,

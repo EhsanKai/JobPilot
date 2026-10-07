@@ -4,7 +4,15 @@ from abc import ABC, abstractmethod
 
 from app.ai.prompts import load_prompt
 from app.ai.provider import AIProvider
+from app.ai.pseudonymize import pseudonymize_contact_details, restore_model
+from app.core.config import settings
 from app.schemas.resume_profile import ParsedResume
+
+_PLACEHOLDER_NOTE = (
+    "Note: e-mail addresses and phone numbers in the resume were replaced by placeholders "
+    "such as [EMAIL_1] or [PHONE_1] for privacy. Treat each placeholder as the value it "
+    "stands for and copy it exactly, wherever that value would appear in your output.\n\n"
+)
 
 # Bump whenever the prompt, the ParsedResume contract, or post-processing
 # changes behavior. Stored with every result; identical file + identical
@@ -53,8 +61,19 @@ class AIResumeParser(ResumeParser):
         )
 
     async def parse(self, text: str) -> ParsedResume:
-        return await self._provider.generate_structured(
-            system=self._system_prompt,
-            prompt=self.build_user_prompt(text),
-            schema=ParsedResume,
+        if not settings.AI_PSEUDONYMIZE_CONTACT_DETAILS:
+            return await self._provider.generate_structured(
+                system=self._system_prompt,
+                prompt=self.build_user_prompt(text),
+                schema=ParsedResume,
+            )
+        # Data minimization (V0.13): the provider sees placeholders, never the candidate's
+        # e-mail address or phone number; the result gets the real values back here.
+        pseudonymized = pseudonymize_contact_details(text)
+        prompt = self.build_user_prompt(pseudonymized.text)
+        if pseudonymized.mapping:
+            prompt = _PLACEHOLDER_NOTE + prompt
+        parsed = await self._provider.generate_structured(
+            system=self._system_prompt, prompt=prompt, schema=ParsedResume
         )
+        return restore_model(parsed, pseudonymized)

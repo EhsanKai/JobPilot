@@ -6,6 +6,7 @@ import { ProfileCompleteness } from "@/components/profile/ProfileCompleteness";
 import { ProfileForm } from "@/components/profile/ProfileForm";
 import { SkillsManager } from "@/components/profile/SkillsManager";
 import { ResumeIntelligenceSummary } from "@/components/resume/ResumeIntelligenceSummary";
+import { ApplicationsSummaryCard } from "@/components/tracking/ApplicationsSummaryCard";
 import { Card } from "@/components/ui/Card";
 
 export default function ProfilePage() {
@@ -20,6 +21,10 @@ export default function ProfilePage() {
       <Card className="mt-6">
         <ProfileCompleteness />
       </Card>
+
+      <div className="mt-6">
+        <ApplicationsSummaryCard />
+      </div>
 
       <div className="mt-10">
         <h2 className="text-xl font-semibold text-slate-900">Your Profile</h2>

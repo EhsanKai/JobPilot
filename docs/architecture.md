@@ -1,9 +1,30 @@
-# JobPilot Architecture — V0 to V0.6
+# JobPilot Architecture — V0 to V0.13
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.6 Job Matching & Explainability is
+to build on them without a rewrite. V0.13 (Docker-first environment, security, privacy and
+production hardening) is summarized in §24 and documented in
+[`docker-development.md`](docker-development.md), [`security.md`](security.md) and
+[`privacy.md`](privacy.md). V0.12 Application Tracking (the lifecycle after an
+application exists: statuses, an append-only history, manual control) is summarized in §23 and
+documented in full in [`application-tracking.md`](application-tracking.md).
+V0.11 Review & Submit (the first version that may
+submit an application — only through a separate, explicitly authorized capability) is
+summarized in §22 and documented in full in
+[`browser-automation.md` §24 Submission Safety Model](browser-automation.md#24-v011-review--submit-the-submission-safety-model).
+V0.10 Browser Automation (the browser
+assistant) is summarized in §21 and documented in full in
+[`browser-automation.md`](browser-automation.md). V0.9 Application Question AI + Human
+Control is summarized in §20 and documented in full in
+[`application-questions.md`](application-questions.md).
+V0.8 Tailored CV & Anschreiben generation
+is summarized in §19 and documented in full in
+[`tailored-documents.md`](tailored-documents.md).
+V0.7 Application Workspace is
+summarized in §18 and documented in full in
+[`application-workspace.md`](application-workspace.md).
+V0.6 Job Matching & Explainability is
 summarized in §17 and documented in full in [`job-matching.md`](job-matching.md).
 The V0.5.1 taxonomy & deterministic
 normalization foundation is summarized in §16 and documented in
@@ -27,8 +48,10 @@ Job Sources → Connectors → Normalized Job Model → Matching Engine → Appl
 V0 implemented the data model at the "Normalized Job Model" stage (the
 `jobs` and `applications` tables). V0.3 implements the first two stages:
 real `JobSource` connectors and the normalized, deduplicated `Job` model
-(§13). No matching engine or application engine logic exists yet — they are
-later versions. The point of building the
+(§13). The matching engine arrived in V0.6 (§17); the Application Engine
+starts with V0.7's Application Workspace (§18), which only *prepares* an
+application — tailored documents, automation and submission are later
+versions. The point of building the
 interface now is that `app/api`, `app/services`, and the database schema
 never need to know which job source or AI provider is behind them.
 
@@ -108,9 +131,10 @@ The schema is normalized rather than storing lists as delimited strings:
 - `jobs` — the canonical job posting. A foundation table in V0; since V0.3
   populated by Job Discovery and global (one row per posting), with
   per-user state in `user_jobs` (§13).
-- `applications` — a foundation table for the future application workflow
-  (status, salary expectation, start date). No document generation or
-  submission logic exists yet.
+- `applications` — a foundation table in V0 (status, salary expectation,
+  start date); since V0.7 the user's private Application Workspace, exactly
+  one per `user_jobs` row (§18). It never generates documents or submits
+  anything.
 
 Migrations are managed with Alembic (`backend/alembic/`). The initial
 migration creates the V0 schema; a second migration adds the V0.1 entities
@@ -120,9 +144,11 @@ described in §10.
 
 Email/password registration and login, bcrypt-hashed passwords (via the
 `bcrypt` library directly — not `passlib`, which has known compatibility
-issues with modern `bcrypt` releases), and stateless JWT access tokens
-(`python-jose`). `app/api/deps.py` provides a `get_current_user` dependency
-used to protect routes. No OAuth provider is implemented in V0; the
+issues with modern `bcrypt` releases), and JWT access tokens (`python-jose`).
+`app/api/deps.py` provides a `get_current_user` dependency used to protect
+routes. Since V0.13 every token belongs to a server-side `auth_sessions` row
+(`sid` claim) that is checked on each request, so logout and "log out
+everywhere" revoke tokens immediately; sign-in and sign-up are throttled (§24). No OAuth provider is implemented in V0; the
 dependency-injection shape makes adding one later (e.g. LinkedIn or Google
 OAuth) additive rather than a redesign.
 
@@ -563,3 +589,421 @@ Canonical Job -> job_intelligence + requirements ┘        │
 - Not in V0.6: browser automation, auto-fill, application submission, CV /
   cover-letter generation, auto-apply.
 
+## 18. V0.7 — Application Workspace & Application Preparation Foundation
+
+Full documentation: [`application-workspace.md`](application-workspace.md).
+
+```
+User
+ │
+ └── UserJob
+      │
+      ├── MatchResult                              (V0.6, job_matches)
+      │
+      └── Application                              (V0.7, applications)
+           ├── ApplicationContextSnapshot          application_context_snapshots
+           ├── PreparationData                     columns of applications
+           └── ResumeReference                     applications.resume_id -> resumes
+```
+
+- **A match is not an application.** An application exists only after the
+  user explicitly chooses *Start Application*. Opening, saving or matching a
+  job never creates one, and starting one submits nothing.
+- **Exactly one Application per UserJob.** `unique(user_job_id)` makes the
+  database refuse duplicates, so double clicks and concurrent requests open
+  the same application. Starting is idempotent (201 on creation, 200 when it
+  exists).
+- **Ownership through the UserJob.** `current_user -> UserJob ->
+  Application`. A composite foreign key `(user_job_id, user_id)` stops an
+  application from referencing another user's UserJob; another user's
+  application is a 404, like one that doesn't exist.
+- **The V0 table was evolved in place** (`start_date` became `available_from`;
+  `salary_expectation`, `salary_currency`, `user_id`, `job_id`, `status` are
+  kept), not duplicated. `PREPARING` is the only status V0.7 uses; the V0
+  lifecycle values were placeholders that V0.12 replaced (§23).
+- **Application data is separate from the profile.** Salary expectation, "mention
+  it in the letter", availability, notice period, work authorization,
+  application language and private notes belong to the application; changing
+  them never touches the profile, preferences, job or match, and the user's
+  choices are never defaulted (language and the letter decision start unset).
+- **A write-once context snapshot.** `application_context_snapshots` keeps the
+  job (the canonical content fields of V0.4's snapshot mechanism) and the
+  selected source posting's identity and URLs as they were when the user
+  started — immutable (`ImmutableMixin`), checksummed, and free of anything the
+  user wrote — so later generation can reproduce what the user applied to even
+  after discovery refreshes the job.
+- **Source posting.** The application targets the job's preferred posting (or
+  another of its postings) and keeps the original URL and where applying
+  happens (V0.4's `application_url` rule); the canonical URL is never assumed
+  to be the application URL.
+- **Resume reference, not copy.** `resume_id` points at the resume version the
+  application was started with (default: the confirmed one, as matching uses);
+  uploading a newer resume doesn't change it, and deleting a resume clears the
+  reference but keeps the application.
+- **Deterministic preparation checklist** computed from the data (nothing
+  stored); no workflow engine.
+- **Migration** `e8b3c1a5d7f2`: additive, attaches V0 rows to their UserJob and
+  gives them a snapshot, refuses (rather than guesses) rows that cannot belong
+  to exactly one UserJob, and downgrades to the exact V0.6 schema.
+- **API**: `POST /jobs/{id}/application`, `GET /applications`,
+  `GET/PATCH /applications/{id}`; job list and details carry
+  `application: {id, status} | null`.
+- **UI**: an *Application* card on job details (Start / Continue Application)
+  and the workspace at `/applications/[id]`.
+- Not in V0.7: tailored CV and Anschreiben generation (V0.8), AI application
+  answers (V0.9), browser automation and auto-fill (V0.10), review and
+  submission (V0.11), the full application lifecycle and tracking (V0.12).
+
+## 19. V0.8 — Tailored CV & Anschreiben Generation
+
+Full documentation: [`tailored-documents.md`](tailored-documents.md).
+
+```
+Application
+ │
+ ├── ApplicationContextSnapshot      application_context_snapshots   (V0.7)
+ ├── PreparationData                 columns of applications         (V0.7)
+ ├── ResumeReference                 applications.resume_id          (V0.7)
+ │
+ └── GeneratedDocuments              generated_documents             (V0.8)
+       ├── TailoredCV                v1, v2 ... (validated attempts)
+       └── CoverLetter               v1, v2 ...
+```
+
+```
+Application ─► generation context ─► AIProvider ─► structured output ─► truth validation ─► document
+               (facts, snapshot,                                         (rejects, never
+                preparation data)                                         repairs)
+```
+
+- **Truth first, enforced three ways.** The AI cannot write plain facts
+  (employers, titles, dates, degrees, skill names, contact details are copied
+  by the server from the *confirmed* resume; the output schema has no field for
+  them); everything it does write cites `source_fact_ids`; and a deterministic
+  validator checks that text against the facts it cites — numbers, taxonomy
+  terms, tool-shaped tokens, organizations, leadership / credential /
+  achievement claims, company and personal claims, any pay talk. A document
+  that fails is rejected whole; only a validated result is a document.
+- **Reuse, not duplication.** Facts come from V0.2's confirmed Resume Profile
+  (accepted and edited items only); the job comes from V0.7's context snapshot
+  (no new snapshot mechanism); validation reuses V0.2's `SourceText` matching
+  and V0.6's taxonomy finders; the AI goes through the existing `AIProvider`
+  abstraction, so nothing is coupled to a vendor.
+- **A generation is an attempt, and attempts are never overwritten.**
+  `generated_documents` holds every attempt; validated ones are numbered per
+  application and type, and the highest is current (derived, not stored).
+  Database checks tie `version_number` and `content` to `status = VALIDATED`,
+  so a failed or rejected attempt can never look like a document; a partial
+  unique index allows one in-flight generation per application and type; a
+  finished attempt is write-once, so the AI original is preserved.
+- **Deterministic generation context.** A pure function of named inputs
+  (candidate facts, job snapshot, application data, optionally the current
+  match as hints) — same inputs, same prompt payload, same `input_hash`. The
+  hash is stored with the document, so a document is recognized as *outdated*
+  when its inputs have changed. The AI is never shown contact details, notes,
+  the salary figure or anything else in the database.
+- **Provenance.** Resume version and confirmed profile, context snapshot, input
+  hash, prompt version (`tailored_cv_v1`, `cover_letter_v1`; fingerprinted so a
+  released prompt cannot be silently edited), provider and model, timestamps,
+  the validation report and the text of every fact the AI was given.
+- **Salary is the user's decision.** The letter states the salary only when
+  `mention_salary_in_letter` is true, in a fixed server-built sentence; the AI
+  may not mention pay; an undecided choice (with a salary set) blocks the
+  letter until the user decides.
+- **Language is the application's.** Never inferred from the job; German and
+  English have fixed subject / salutation / closing wording.
+- **Authorization** follows the V0.7 chain `user → Application → UserJob`; a
+  composite foreign key `(application_id, user_id)` keeps a document from being
+  stored for another user's application; anything not yours is a 404.
+- **Failures are application-level errors** (no raw provider error, prompt or
+  unvalidated output reaches the user) and always end in a terminal state, so
+  nothing is stuck "generating"; with no AI provider, generation fails — it
+  never fabricates.
+- **Migration** `f1a6d3c8b2e4`: purely additive (two enum types, one table, one
+  unique constraint on `applications (id, user_id)`); no V0–V0.7 row changes;
+  downgrades to the exact V0.7 schema.
+- **API**: `GET /applications/{id}/documents`, `GET .../documents/{document_id}`,
+  `POST .../documents/cv`, `POST .../documents/cover-letter` (no body; every POST
+  is a new version).
+- **UI**: the *Documents* section of `/applications/[id]` — status, Generate /
+  View / Regenerate, version history, blockers, rejection reasons, and a viewer
+  that shows where each statement comes from.
+- Not in V0.8: editing generated documents (kept apart from the AI original when
+  it arrives), PDF / DOCX export, AI answers to application questions (V0.9),
+  browser automation and auto-fill (V0.10), review and submission (V0.11),
+  tracking (V0.12).
+
+## 20. V0.9 — Application Question AI + Human Control at Every Stage
+
+Full documentation: [`application-questions.md`](application-questions.md).
+
+### 20.1 The principle: Human Control at Every Stage
+
+> The user always owns the application and must be able to take over manually at
+> any stage. AI never creates a dependency the user cannot continue without. AI
+> output is a *suggestion*; user-authored content is *authoritative*; an AI
+> suggestion never silently overwrites it.
+
+This is a product principle that shapes architecture, APIs, data models, UI and the
+future browser automation. At every stage the user can inspect, edit, reject,
+replace, copy, export and continue manually, and return to AI later.
+
+### 20.2 The Human Control Boundary
+
+Every AI-generated artifact has a **user-owned final representation**, kept apart
+from the AI's. Content crosses the boundary only by an explicit user action.
+
+```
+AI side                                     user side
+-----------------------------------------   ----------------------------------------
+Application question   suggestion (ai_*)     answer (final_*)          accept · edit · manual · clear
+Tailored CV            ai / humanized        user_edited version       edit · confirm before superseding
+Anschreiben            ai / humanized        user_edited version       edit · confirm before superseding
+Browser-filled field   filled value (V0.10)  what the user sees/edits  edit before submission
+CV photo               —                     the user's own file       only the user changes it
+```
+
+It is documented as a **pattern, not a framework**: each artifact implements it in
+the shape that fits (separate columns on the answer; an immutable version row with an
+`origin` for documents), because the current code does not justify a generic
+mechanism. The enforced rules: a client cannot send a suggestion, a validation result
+or provenance; `generate` / `regenerate` replace only the suggestion and need an
+acknowledgement when the user already has an answer; replacing an answer or
+superseding an edited version needs an explicit confirmation; a user answer is stored
+exactly as written and never truncated; a rejected or failed generation changes
+nothing; and every generation is optional.
+
+### 20.3 Application questions
+
+```
+Application ─► ApplicationQuestion ─► ApplicationQuestionAnswer     (current state: suggestion | answer)
+                      └──────────────► ApplicationQuestionGeneration  (every attempt, write-once)
+```
+
+- **Source-neutral.** `source`, `external_key`, `field_name`, `source_metadata` hold
+  whatever the creator knows; V0.9 questions are manual, V0.10's browser-discovered
+  fields will populate the same model (no website-specific names anywhere).
+- **Deterministic before AI.** Salary, dates, notice period, work authorization,
+  application language, contact details and (dates permitting) total experience are
+  answered from structured data with no AI call; missing data is `NEEDS_INPUT`, never a
+  guess. Everything else goes to the AI.
+- **Truth first, reusing V0.8.** The AI path builds on V0.8's generation context (same
+  fact ids, same confirmed-resume facts, same application facts) and validates with
+  V0.8's claim machinery (`ValidationRun`) plus answer-specific rules (options,
+  numbers, dates, yes/no, topic, length). Same `AIProvider` abstraction, same prompt
+  versioning and fingerprinting, same provenance conventions; no second framework.
+- **Provenance** on every attempt: prompt version and hash, provider and model, resume
+  version, context snapshot, input hash, question fingerprint, cited facts,
+  validation report, timestamp.
+
+### 20.4 Document versions: origin, Humanize and edits
+
+`generated_documents` gains `origin` (`ai` · `humanized` · `user_edited`),
+`base_document_id` and `prompt_hash`. **Humanize** runs the V0.8 pipeline over an
+already validated letter and produces a *new validated version*; it is not a validator
+bypass (same claim checks plus rewording rules; failure leaves the letter untouched).
+**Edits** are new immutable versions marked `user_authored`. The CV photo is a
+user-owned asset outside every generated schema.
+
+### 20.5 Migration, API, UI
+
+Migration `a9d4f2b7c1e3`, purely additive (four tables, six enum types, three columns
+and one check constraint on `generated_documents`; downgrades to the exact V0.8
+schema). API: `/applications/{id}/questions…`, `…/documents/cover-letter/humanize`,
+`…/documents/{id}/edit`, `…/cv-photo`. UI: *Application questions* section, section
+navigation, Humanize / Edit / Copy / Download / photo in *Documents*.
+
+### 20.6 Preparing V0.10 (built — see §21)
+
+Browser automation *populates* `ApplicationQuestion` (`source = "browser"`,
+`external_key` / `field_name` / `source_metadata` from the form), reuses the existing
+suggestion → review → accept flow, fills only answers the user approved, and keeps the
+user able to edit every field before anything is submitted.
+
+## 21. V0.10 — Browser Automation & Human-Controlled Application Filling
+
+Full documentation: [`browser-automation.md`](browser-automation.md).
+
+> **JobPilot fills forms; the user remains in control.**
+
+```
+Application ─► AutomationSession ─► BrowserSession ─► BrowserPage        (Chromium; Playwright only inside browser/)
+                     │                                     │
+                     │                          FormDiscovery ─► DiscoveredField[]
+                     │                                     │
+                     ├─► AutomationField ◄── FieldMapper ──┴─► ApplicationQuestion (V0.9, source = "browser")
+                     └─► AutomationEvent                       │
+                                                  AnswerResolver ─► BrowserFiller ─► write · read back · verify
+```
+
+- **Human control is structural.** `pause` / `take-control` / `stop` change the session's
+  status, and every page write first locks the session row `FOR SHARE` and requires
+  `RUNNING`; the three actions take the row exclusively, so after one returns nothing else
+  is written. The assistant never overwrites a field the user changed (a salted hash of
+  what it last wrote tells "still mine" from "edited"), and resuming reads the page before
+  it fills anything.
+- **No submission, by construction.** The browser interface (`BrowserPage`) can read, type,
+  choose, check and attach — it has no click or key press, so no code on top of it can press
+  *Submit* (V0.11 adds submission as a separate, permit-gated capability — §22 — and leaves
+  this interface unchanged). Final actions (English and German) are recognized, never pressed, and the user is
+  told to submit manually. `SUBMIT_ACTIONS_ALLOWED = False`; tests run the full flow against
+  a page whose submit button counts every click.
+- **No Playwright in the domain.** `BrowserDriver` / `BrowserSession` / `BrowserPage` and plain
+  dataclasses are the boundary; Playwright runs on its own thread behind them.
+- **Reuse, not a parallel system.** Discovered fields map to V0.9 `ApplicationQuestion`s
+  (identity by `source` + `external_key`, so rediscovery never duplicates); the V0.9 answer
+  validation stays authoritative; AI is used only to match an ambiguous field to an *existing*
+  question, with structured, confidence-gated, provenance-recorded output.
+- **Approval hierarchy.** the user's answer > deterministic application data > an accepted
+  answer > (unreviewed AI suggestion: shown, never filled) > "needs your input". Legal and
+  consent fields are never ticked.
+- **Hand back, never work around.** A CAPTCHA, a login, a refusal or an unexpected website
+  stops the assistant (`BLOCKED` / `PAUSED`) and returns the browser to the user.
+- **Privacy.** No cookies, tokens, passwords or form values are stored or returned; URLs are
+  stored without query; events and logs hold codes only; screenshots are on-demand and never
+  stored.
+
+Migration `b4e8c2d6a1f9`, purely additive (three tables, three enum types). API:
+`/applications/{id}/automation/…`. UI: the *Browser assistant* section of the workspace.
+
+## 22. V0.11 — Review & Submit
+
+Full documentation: [`browser-automation.md` §24](browser-automation.md#24-v011-review--submit-the-submission-safety-model).
+
+> **AI prepares the application; the user reviews it and authorizes it; only then does
+> JobPilot perform one narrowly scoped submission action.**
+
+```
+V0.10   Discover → Map → Review → Approve → Fill → Verify → Human takeover → STOP
+V0.11   … → Human takeover → Final Review → Consent Review → Explicit Submission Authorization
+          → Dedicated Submit Capability → Submit Exactly Once → Verify Submission Result
+```
+
+- **Submission is a separate capability, not a looser fill.** `SUBMIT_ACTIONS_ALLOWED` is
+  still `False` and `BrowserPage` still has no click, key press or submit. Pressing the final
+  button lives on a second, narrow interface (`FinalSubmissionChannel`:
+  `find_final_controls` · `page_marker` · `submit_final_application(permit)` · `read_outcome`)
+  whose only acting method takes a single-use `SubmitPermit` — issued only by
+  `services/automation/submission.py`, after a persisted authorization was consumed.
+- **What is submitted is what was reviewed.** `review.compute` derives the *submission
+  state* from the live page and the session's records — every field's final value, source
+  and verification, every document's id / version / content hash, every consent's exact
+  text, state and authorization, the destination and the one final button — and its
+  SHA-256 over canonical JSON (no timestamps or row ids). A `FinalReview` stores that
+  snapshot immutably; the hash is recomputed at authorization and again under the write
+  gate immediately before the press. A navigation or reload is detected separately by a
+  page-instance marker.
+- **Authorization is explicit, scoped and one-shot.** `SubmissionAuthorization` is bound
+  to the user, application, session, review, hash and host; it expires; it is consumed in
+  the same transaction that creates the `SubmissionAttempt` (session and authorization rows
+  locked). The database allows one attempt per authorization and one running attempt per
+  application.
+- **Consents are individual.** Each legal confirmation needs its own
+  `ConsentAuthorization` for its exact text (SHA-256); a changed text authorizes nothing.
+  Only then may JobPilot tick that one box; the fill assistant still never does.
+- **Every relevant change invalidates.** Take-control, pause, stop, resume, fill, mapping,
+  document and consent decisions, navigation/reload and another website invalidate the
+  review and the authorization (`invalidation.py`, guarded UPDATEs); changes made elsewhere
+  are caught by the hash.
+- **No automatic retry, ever.** `submit_triggered_at` is committed before the press; after
+  it, anything uncertain is `SUBMISSION_UNKNOWN`, and the application accepts no new
+  authorization until the user records what they found. `SUCCESS` needs evidence on the page
+  (a confirmation phrase, URL or marker that was not there before), never just a click.
+- **Audit, not tracking.** `SubmissionAttempt` is append-only and holds safe metadata only.
+  A confirmed submission sets the application's status (V0.11: the existing `submitted`; since
+  V0.12 it goes through application tracking and is `APPLIED` — §23). The audit itself is
+  never touched by tracking.
+
+Migration `c5f2a8e1d9b3`, purely additive (four tables, three enum types, one nullable
+column). API: `…/automation/{sid}/final-review`, `…/consents/{fid}`,
+`…/submission-authorization`, `…/submit`, `…/automation/submissions`. UI: *Final review*
+inside the Browser assistant section.
+
+## 23. V0.12 — Application Tracking
+
+Full documentation: [`application-tracking.md`](application-tracking.md).
+
+> **The user manages and tracks every application after it exists — by hand, deterministically,
+> with a history nobody can rewrite.**
+
+```
+User → UserJob → Application ──┬── status (current)  ◄── one writer ──►  ApplicationStatusHistory (append-only)
+                               ├── applied_at · last_status_change_at · follow_up_at
+                               ├── ApplicationContextSnapshot     company · position · source · original URL
+                               └── SubmissionAttempt (V0.11)      read for the timeline; never changed
+```
+
+- **One entity.** The V0.7 `Application` is extended; there is no second "tracking" application.
+  Company, position, source and original URL come from the immutable V0.7 context snapshot, so
+  tracking stays understandable when the canonical job changes or its posting disappears.
+- **A controlled lifecycle.** `ApplicationStatus` = SAVED · PREPARING · APPLIED · FOLLOW_UP ·
+  INTERVIEW · OFFER · REJECTED · WITHDRAWN · NO_RESPONSE (the migration maps the V0 values,
+  `SUBMITTED → APPLIED`). Which status may follow which is a pure table
+  (`services/applications/state_machine.py`); an invalid change is a 409. A broader change needs an
+  explicit, noted **correction** — never a silent bypass.
+- **One writer, one transaction.** `services/applications/tracking.py` is the only code that changes
+  `Application.status`. It locks the application row (`FOR UPDATE`), reads the status under the lock,
+  validates, and writes the status and a history row together, so `Application.status` always equals the
+  latest history row's `new_status` (the current status is never recomputed from history), and
+  concurrent changes cannot corrupt either, the ordering (`sequence`) or the timestamps.
+- **Append-only history.** `ApplicationStatusHistory` rows (entry type, previous / new status, server
+  time, `source` SYSTEM / USER / SUBMISSION, `actor`, the user's note exactly as written) are never
+  updated (`ImmutableMixin`, database checks). A later change is another row. Previous status,
+  user, time and actor are derived by the server; request bodies that try to send them are rejected.
+- **Downstream of V0.11, never upstream.** A confirmed submission → `APPLIED` (`source=SUBMISSION`);
+  `SUBMISSION_UNKNOWN` and `FAILED_BEFORE_SUBMIT` do **not** — the user decides what an uncertain result
+  means. V0.11's two status writes were replaced by calls into tracking; its authorization, exactly-once
+  protection, consents and audit records are unchanged, and tracking has no path to submit.
+- **Deterministic and user-controlled.** No AI, no inference from text or time, no e-mail or calendar,
+  no scheduler: `follow_up_at` is a date shown to the user and nothing else acts on it. Notes are the
+  user's own words and are never rewritten or given to AI.
+- **My Applications.** `GET /applications` gains filters (status, company, source, application date) and
+  sorting, evaluated by the server against the snapshot; `GET /applications/summary` counts per status for
+  the dashboard and profile. The tracking page `/applications/{id}/tracking` shows the timeline (history +
+  V0.11 attempts, read in place) and the user's actions; the workspace gains a Tracking card.
+- **Ownership.** Every operation is scoped to the authenticated user; another user's application is the
+  usual 404. The history's composite foreign key `(application_id, user_id)` keeps rows with their owner.
+
+Migration `d6a3f1b8c2e5` (replaces the status type with an explicit mapping, adds three columns and the
+history table, backfills history for existing applications; downgrade → upgrade tested with data).
+
+## 24. V0.13 — Docker-first environment, security, privacy & production hardening
+
+No new product feature: V0.13 makes the system easy to run and harder to misuse.
+
+- **Startup as a pipeline, not a hope.** `docker-compose.yml` runs `postgres` → `backend` →
+  `frontend` (+ the opt-in `seed`), each gated on the previous one's health check. The
+  backend entrypoint runs `app/db/migrate.py` (bounded wait for the database, PostgreSQL
+  advisory lock, `alembic upgrade head`, verification; non-zero exit on any failure) before
+  `uvicorn`. `/health` is liveness; `/health/ready` is readiness (database reachable and
+  schema at the code's Alembic head). `tests/test_startup.py` takes an empty database through
+  migrate → seed → login.
+- **Sessions.** `auth_sessions` (id = the token's `sid`, user, created, expires, revoked; no
+  IP/device data). `get_current_user` = signature + expiry + an open session, one query.
+- **Throttling.** `app/core/rate_limit.py`: in-process sliding windows per account (hashed
+  e-mail) and per client address for sign-in, per address for sign-up.
+- **HTTP layer.** Pure-ASGI middleware, outermost first: security headers → CORS (explicit
+  origins, no credentials) → body size limit → app. The frontend sets its own CSP and headers
+  in `next.config.ts`.
+- **Browser egress filter.** `automation/browser/egress_proxy.py`: when private hosts are not
+  allowed, each Chromium the assistant launches gets its own in-process forward proxy (on the
+  Playwright worker loop) that resolves, checks and pins every destination; the V0.10 route
+  guard remains as a first layer.
+- **Privacy services** (`app/services/privacy/`): `inventory.py` classifies every table as
+  user-owned (by category) or shared — the single source for the overview, the export
+  (`export.py`, ZIP of JSON + files) and deletion (`deletion.py`: close live browsers, delete
+  the user row so ON DELETE CASCADE removes everything owned, then the user's file folder via
+  `FileStorage.delete_owner`). `preferences.py` records the external-AI-processing choice in
+  `consent_records` (append-only, versioned).
+- **AI gate and minimization.** `get_user_ai_provider` wraps the configured provider: a user
+  who switched AI processing off gets a provider that refuses (`AI_DISABLED_BY_USER`) before
+  anything is sent. `app/ai/pseudonymize.py` replaces e-mail addresses and phone numbers in
+  resume text with placeholders and restores them in the structured result.
+- **Configuration safety.** `validate_security` (in `get_settings`) refuses wildcard CORS
+  everywhere and development secrets/credentials or private browser hosts in production,
+  without echoing configured values.
+- **Frontend.** Settings → Privacy & data (`components/privacy/`), server-side logout,
+  `lib/consent.ts` (consent architecture with no optional category registered today).
+
+Migration `e9c4b2a7d1f3` (auth_sessions, consent_records, users.external_ai_processing_allowed;
+tokens issued before it carry no session and are no longer accepted — users sign in once).

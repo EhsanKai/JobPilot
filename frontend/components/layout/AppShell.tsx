@@ -10,9 +10,11 @@ import type { User } from "@/types/user";
 const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/jobs", label: "Jobs" },
+  { href: "/applications", label: "Applications" },
   { href: "/profile", label: "Profile" },
   { href: "/profile/preferences", label: "Preferences" },
   { href: "/profile/resume", label: "Resume" },
+  { href: "/settings", label: "Settings" },
 ];
 
 interface AppShellProps {
@@ -45,7 +47,8 @@ export function AppShell({ children }: AppShellProps) {
                 href={link.href}
                 className={`text-sm font-medium ${
                   pathname === link.href ||
-                  (link.href === "/jobs" && pathname.startsWith("/jobs/"))
+                  (link.href === "/jobs" && pathname.startsWith("/jobs/")) ||
+                  (link.href === "/applications" && pathname.startsWith("/applications/"))
                     ? "text-brand-700"
                     : "text-slate-600 hover:text-slate-900"
                 }`}

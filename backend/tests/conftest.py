@@ -11,6 +11,7 @@ os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://jobpilot:jobpilot@localhost:5432/jobpilot_test"
 )
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("STORAGE_PROVIDER", "local")
 # Tests must never reach a real (paid) AI API.
 os.environ["AI_PROVIDER"] = "disabled"
@@ -23,6 +24,7 @@ os.environ["LEVER_SITES"] = ""
 
 from app.ai.factory import get_ai_provider  # noqa: E402
 from app.ai.provider import AIProvider  # noqa: E402
+from app.core.rate_limit import auth_limiter  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_db, get_session_factory  # noqa: E402
 from app.main import app  # noqa: E402
@@ -33,6 +35,7 @@ from app.services.job_discovery.registry import (  # noqa: E402
 from app.services.storage.base import FileStorage  # noqa: E402
 from app.services.storage.factory import get_file_storage  # noqa: E402
 from app.services.storage.local import LocalFileStorage  # noqa: E402
+from tests.fake_site import FakeApplicationSite  # noqa: E402
 from tests.job_helpers import FakeJobBoards, make_registry  # noqa: E402
 from tests.resume_helpers import FakeAIProvider  # noqa: E402
 
@@ -52,9 +55,16 @@ def _create_schema() -> Generator[None, None, None]:
 @pytest.fixture(autouse=True)
 def _clean_tables() -> Generator[None, None, None]:
     yield
+    # One statement for all tables: per-table TRUNCATEs cost ~1 s per test.
+    tables = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
     with engine.begin() as connection:
-        for table in reversed(Base.metadata.sorted_tables):
-            connection.execute(text(f'TRUNCATE TABLE "{table.name}" CASCADE'))
+        connection.execute(text(f"TRUNCATE TABLE {tables} CASCADE"))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits() -> None:
+    # Every test client calls from the same address: each test starts with a clean count.
+    auth_limiter.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -154,3 +164,37 @@ def register_and_login(client: TestClient):  # type: ignore[no-untyped-def]
         return response.json()
 
     return _register
+
+
+# --- Browser assistant (V0.10) -------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def fake_site() -> Generator["FakeApplicationSite", None, None]:
+    """A local employer website served to a real headless Chromium."""
+    site = FakeApplicationSite().start()
+    yield site
+    site.stop()
+
+
+@pytest.fixture
+def automation_env(
+    monkeypatch: pytest.MonkeyPatch, fake_site: "FakeApplicationSite"
+) -> Generator["FakeApplicationSite", None, None]:
+    """Headless Chromium, the fake site (on localhost) allowed, no browser left behind."""
+    from app.core.config import settings
+    from app.services.automation.registry import registry
+
+    monkeypatch.setattr(settings, "AUTOMATION_BROWSER_HEADLESS", True)
+    monkeypatch.setattr(settings, "AUTOMATION_ALLOW_PRIVATE_HOSTS", True)
+    chromium = os.environ.get("TEST_CHROMIUM_PATH")
+    monkeypatch.setattr(settings, "AUTOMATION_CHROMIUM_PATH", chromium)
+    registry.set_driver_factory(None)
+    fake_site.submissions.clear()
+    fake_site.page_loads.clear()
+    fake_site.received.clear()
+    yield fake_site
+    registry.shutdown()
+    registry.set_driver_factory(None)
+    fake_site.submissions.clear()
+    fake_site.received.clear()
