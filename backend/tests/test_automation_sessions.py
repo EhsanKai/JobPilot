@@ -274,17 +274,40 @@ def test_invalid_transitions_are_refused(
         error(post(client, auth, aid, sid, action), 409, "INVALID_SESSION_STATE")
 
 
-def test_there_is_no_submitted_status_and_no_submit_endpoint(
-    client: TestClient, auth: dict[str, str], app_: dict[str, Any], session: dict[str, Any]
+def test_there_is_no_submitted_status_and_no_unauthorized_submit_endpoint(
+    client: TestClient,
+    auth: dict[str, str],
+    app_: dict[str, Any],
+    session: dict[str, Any],
+    site: FakeApplicationSite,
 ) -> None:
+    """V0.10 had no submit endpoint at all. V0.11 adds exactly one, and only behind an
+    explicit authorization (see tests/test_submission.py): the browser session itself
+    still has no SUBMITTED status and no apply / click / send action, and the one submit
+    route accepts nothing but an existing authorization -- no empty request, no URL, no
+    selector, no form data."""
     from app.models import AutomationStatus
 
     assert "SUBMITTED" not in {s.value for s in AutomationStatus}
-    for action in ("submit", "apply", "click", "send"):
+    for action in ("apply", "click", "send", "press", "submit-form"):
         response = post(client, auth, app_["id"], session["id"], action)
         assert response.status_code in (404, 405)
+    for body in (
+        None,
+        {},
+        {"url": "https://evil.example.org/apply"},
+        {"selector": "#submit-btn"},
+        {"form_data": {"email": "x@example.com"}},
+    ):
+        assert post(client, auth, app_["id"], session["id"], "submit", body).status_code == 422
+    unknown = post(
+        client, auth, app_["id"], session["id"], "submit", {"authorization_id": str(uuid.uuid4())}
+    )
+    assert unknown.status_code == 404
+    assert site.submit_clicks == 0
     paths = {route.path for route in client.app.routes}  # type: ignore[attr-defined]
-    assert not any("submit" in path and "automation" in path for path in paths)
+    submitting = {p for p in paths if "submit" in p and "automation" in p}
+    assert submitting == {"/api/v1/applications/{application_id}/automation/{session_id}/submit"}
 
 
 def test_stop_leaves_the_browser_open_for_the_user_unless_asked_to_close_it(
