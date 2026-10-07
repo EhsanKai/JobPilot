@@ -12,6 +12,8 @@ import {
   makePreparedApplication,
   makeProgress,
   makeResume,
+  makeSubmissionSummary,
+  makeTracking,
 } from "./fixtures/application";
 import { blocked, makeList } from "./fixtures/documents";
 import { makeMatchSummary } from "./fixtures/match";
@@ -770,6 +772,59 @@ describe("ApplicationWorkspace", () => {
     it("keeps the application separate from the profile", async () => {
       await renderWorkspace();
       expect(screen.getByText(/Your profile and preferences are never changed from here/)).toBeInTheDocument();
+    });
+  });
+
+  describe("tracking (V0.12)", () => {
+    it("shows the current tracking status and a link to the timeline", async () => {
+      await renderWorkspace(makeApplication({ status: "PREPARING", tracking: makeTracking() }));
+      const card = screen.getByRole("heading", { name: "Tracking" }).closest("div")!;
+      expect(within(card).getByLabelText("Tracking status")).toHaveTextContent("In preparation");
+      expect(within(card).getByText("Not applied yet")).toBeInTheDocument();
+      expect(within(card).getByRole("link", { name: /Timeline & status/ })).toHaveAttribute(
+        "href",
+        "/applications/app-1/tracking"
+      );
+    });
+
+    it("shows a submitted application as Applied, with its submission result and date", async () => {
+      await renderWorkspace(
+        makeApplication({
+          status: "APPLIED",
+          tracking: makeTracking({ status: "APPLIED", submission: makeSubmissionSummary() }),
+        })
+      );
+      expect(screen.getByLabelText("Application status")).toHaveTextContent("Applied");
+      const card = screen.getByRole("heading", { name: "Tracking" }).closest("div")!;
+      expect(within(card).getByLabelText("Tracking status")).toHaveTextContent("Applied");
+      expect(within(card).getAllByText("7 Oct 2026").length).toBeGreaterThan(0); // applied + last change
+      expect(
+        within(card).getByText("Submitted successfully · confirmation ABC-123")
+      ).toBeInTheDocument();
+    });
+
+    it("does not call an uncertain submission applied", async () => {
+      await renderWorkspace(
+        makeApplication({
+          tracking: makeTracking({
+            status: "PREPARING",
+            submission: makeSubmissionSummary({ result: "SUBMISSION_UNKNOWN", needs_verification: true }),
+          }),
+        })
+      );
+      const card = screen.getByRole("heading", { name: "Tracking" }).closest("div")!;
+      expect(within(card).getByLabelText("Tracking status")).toHaveTextContent("In preparation");
+      expect(
+        within(card).getByText("Submission result uncertain — user verification required")
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the preparation workspace, documents and browser assistant", async () => {
+      await renderWorkspace(
+        makeApplication({ status: "APPLIED", tracking: makeTracking({ status: "APPLIED" }) })
+      );
+      expect(screen.getByRole("form", { name: "Application preparation" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
     });
   });
 });

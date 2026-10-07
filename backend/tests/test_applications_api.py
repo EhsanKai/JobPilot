@@ -119,7 +119,7 @@ def test_start_creates_a_preparing_application_with_its_context(
 
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "preparing"
+    assert body["status"] == "PREPARING"
     assert body["job_id"] == str(job.id)
     # Nothing is invented for the user.
     assert all(body[field] is None for field in PREPARATION_FIELDS)
@@ -214,7 +214,7 @@ def test_jobs_report_your_application(
 
     application = started(client, auth, with_application)
 
-    expected = {"id": application["id"], "status": "preparing"}
+    expected = {"id": application["id"], "status": "PREPARING"}
     detail = client.get(f"{API}/jobs/{with_application.id}", headers=auth).json()
     assert detail["application"] == expected
     items = {i["id"]: i for i in client.get(f"{API}/jobs", headers=auth).json()["items"]}
@@ -372,7 +372,7 @@ def test_your_application_is_not_visible_through_the_job_endpoints_of_another_us
     mine = client.get(f"{API}/jobs/{job.id}", headers=auth).json()
     theirs = client.get(f"{API}/jobs/{job.id}", headers=other_auth).json()
 
-    assert mine["application"] == {"id": application["id"], "status": "preparing"}
+    assert mine["application"] == {"id": application["id"], "status": "PREPARING"}
     assert theirs["application"] is None  # the job is shared; the application is not
     assert client.get(f"{API}/jobs", headers=other_auth).json()["items"][0]["application"] is None
     assert application["id"] not in client.get(f"{API}/jobs/{job.id}", headers=other_auth).text
@@ -1180,7 +1180,7 @@ def test_applications_are_listed_newest_activity_first_with_pagination(
     assert item["company_name"] == "Example GmbH"
     assert item["location"] == "Köln"
     assert item["source"] == "greenhouse"
-    assert item["status"] == "preparing"
+    assert item["status"] == "PREPARING"
     assert item["job_id"] == str(jobs[0].id)
     assert item["original_url"].startswith("https://job-boards.greenhouse.io/")
     assert item["progress"]["total"] == 6
@@ -1277,17 +1277,18 @@ def test_a_user_job_removed_through_the_orm_takes_its_application_along(
     assert count(db_session, ApplicationContextSnapshot) == 0
 
 
-def test_legacy_status_values_are_still_readable(
+def test_a_later_status_is_readable_and_the_preparation_patch_cannot_change_it(
     client: TestClient, auth: dict[str, str], db_session: Session
 ) -> None:
     job = make_job(db_session, user_by_email(db_session))
     application = started(client, auth, job)
     db_session.execute(
-        text("UPDATE applications SET status = 'SUBMITTED' WHERE id = :id"),
+        text("UPDATE applications SET status = 'APPLIED', applied_at = now() WHERE id = :id"),
         {"id": application["id"]},
     )
     db_session.commit()
 
-    assert get(client, auth, application["id"])["status"] == "submitted"
-    # ...and V0.7 cannot move an application between statuses.
-    assert patch(client, auth, application["id"], {"status": "preparing"}).status_code == 422
+    assert get(client, auth, application["id"])["status"] == "APPLIED"
+    # ...and the preparation PATCH cannot move an application between statuses
+    # (V0.12: that is `PATCH /applications/{id}/status`).
+    assert patch(client, auth, application["id"], {"status": "PREPARING"}).status_code == 422

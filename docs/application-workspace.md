@@ -194,6 +194,12 @@ them, so they are kept untouched and still readable — but nothing in V0.7 sets
 them, and `PATCH` cannot change the status. V0.7 adds no `INTERVIEW`, `OFFER`,
 `FOLLOW_UP` or `NO_RESPONSE`.
 
+> **V0.12 update.** The V0 placeholders were replaced by the tracking lifecycle (SAVED,
+> PREPARING, APPLIED, FOLLOW_UP, INTERVIEW, OFFER, REJECTED, WITHDRAWN, NO_RESPONSE; `SUBMITTED`
+> became `APPLIED`, `DRAFT` became `SAVED`) and the status changes through
+> `PATCH /applications/{id}/status` — see [`application-tracking.md`](application-tracking.md).
+> `PATCH /applications/{id}` described here still cannot change it. The text above describes V0.7.
+
 ## 6. One application per UserJob
 
 `unique(user_job_id)` makes the database refuse a second application for the

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.models.application import ApplicationStatus, NoticePeriodUnit, WorkAuthorization
 from app.models.resume import ResumeStatus
 from app.schemas.application_context import ApplicationContextDocument
+from app.schemas.application_tracking import ApplicationTrackingRead, SubmissionSummaryRead
 from app.schemas.document_types import CurrencyCode, LanguageKey, quantize_money
 from app.schemas.matching import MatchSummaryRead
 
@@ -230,6 +231,8 @@ class ApplicationRead(BaseModel):
     #: Never recalculated here.
     match: MatchSummaryRead | None
     progress: PreparationProgressRead
+    #: Where the application is in its tracking lifecycle (V0.12).
+    tracking: ApplicationTrackingRead
 
 
 class ApplicationSummaryRead(BaseModel):
@@ -246,6 +249,12 @@ class ApplicationSummaryRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     progress: PreparationProgressRead
+    # Tracking (V0.12)
+    applied_at: datetime | None
+    last_status_change_at: datetime
+    follow_up_at: datetime | None
+    #: The latest V0.11 submission attempt, if any.
+    submission: SubmissionSummaryRead | None
 
 
 class ApplicationListResponse(BaseModel):

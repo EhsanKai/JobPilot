@@ -7,6 +7,7 @@ import { getPreferences } from "@/lib/api/preferences";
 import { getCurrentResume } from "@/lib/api/resumes";
 import { Card } from "@/components/ui/Card";
 import { ProfileCompleteness } from "@/components/profile/ProfileCompleteness";
+import { ApplicationsSummaryCard } from "@/components/tracking/ApplicationsSummaryCard";
 import { isInProgress } from "@/lib/resumeIntelligence";
 import type { JobPreferences } from "@/types/preferences";
 import type { Resume } from "@/types/resume";
@@ -19,7 +20,6 @@ interface UpcomingFeature {
 const UPCOMING_FEATURES: UpcomingFeature[] = [
   { title: "AI Matching", version: "V0.5" },
   { title: "Application Assistant", version: "V0.7" },
-  { title: "Application Tracking", version: "V0.12" },
 ];
 
 type StepState = "done" | "warning" | "pending" | "error";
@@ -158,6 +158,8 @@ export function DashboardContent({ firstName }: { firstName: string }) {
           Find jobs
         </Link>
       </Card>
+
+      <ApplicationsSummaryCard />
 
       <div>
         <h2 className="text-lg font-semibold text-slate-900">Upcoming features</h2>
