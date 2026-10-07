@@ -148,7 +148,9 @@ export function PrivacySettings() {
             <li key={category.key} className="text-sm" data-testid={`data-category-${category.key}`}>
               <div className="flex items-baseline justify-between gap-4">
                 <span className="font-medium text-slate-900">{category.title}</span>
-                <span className="text-slate-500">{total(category.records)} records</span>
+                <span className="text-slate-500">
+                  {total(category.records)} {total(category.records) === 1 ? "record" : "records"}
+                </span>
               </div>
               <p className="text-slate-600">{category.purpose}</p>
               <p className="text-xs text-slate-500">Retention: {category.retention}</p>

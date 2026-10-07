@@ -66,7 +66,7 @@ test("privacy settings: my data, AI choice, cookie preferences and download", as
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
   // My data
-  await expect(page.getByTestId("data-category-account")).toContainText("1 records");
+  await expect(page.getByTestId("data-category-account")).toContainText("1 record");
   await expect(page.getByText(/legal review/)).toBeVisible();
 
   // Cookie preferences: nothing optional, and no banner anywhere.

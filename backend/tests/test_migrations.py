@@ -30,7 +30,7 @@ from typing import Any
 import pytest
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from alembic import command
 from alembic.autogenerate import compare_metadata
@@ -75,6 +75,21 @@ def create_scratch_database(admin: Engine, name: str, attempts: int = 5) -> None
             time.sleep(0.5)
 
 
+def drop_scratch_database(admin: Engine, name: str, attempts: int = 10) -> None:
+    """Drop a scratch database. WITH (FORCE) cannot end an autovacuum worker for a
+    non-superuser role ("permission denied to terminate process"), and one may start right
+    after a migration's DDL: retried briefly, as for creation."""
+    for attempt in range(attempts):
+        try:
+            with admin.connect() as connection:
+                connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            return
+        except (OperationalError, ProgrammingError):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+
+
 @pytest.fixture
 def migration_db(monkeypatch: pytest.MonkeyPatch) -> Generator[Engine, None, None]:
     url = make_url(TEST_DATABASE_URL)
@@ -93,8 +108,7 @@ def migration_db(monkeypatch: pytest.MonkeyPatch) -> Generator[Engine, None, Non
         yield engine
     finally:
         engine.dispose()
-        with admin.connect() as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        drop_scratch_database(admin, name)
         admin.dispose()
 
 

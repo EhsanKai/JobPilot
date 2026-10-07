@@ -33,7 +33,7 @@ from app.services.storage.factory import get_file_storage
 from app.services.storage.local import LocalFileStorage
 from scripts import seed_manual_test_data as seed
 from tests.conftest import TEST_DATABASE_URL
-from tests.test_migrations import create_scratch_database
+from tests.test_migrations import create_scratch_database, drop_scratch_database
 
 
 @pytest.fixture
@@ -53,8 +53,7 @@ def fresh_db(monkeypatch: pytest.MonkeyPatch) -> Generator[Engine, None, None]:
         yield engine
     finally:
         engine.dispose()
-        with admin.connect() as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        drop_scratch_database(admin, name)
         admin.dispose()
 
 
