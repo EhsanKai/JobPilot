@@ -1,9 +1,12 @@
-# JobPilot Architecture — V0 to V0.12
+# JobPilot Architecture — V0 to V0.13
 
 This document captures the architectural decisions behind the V0 foundation,
 the V0.1 structured Job Search Profile, V0.2 Resume Intelligence, V0.3
 Job Discovery and V0.4 Job Intelligence, and how later versions are expected
-to build on them without a rewrite. V0.12 Application Tracking (the lifecycle after an
+to build on them without a rewrite. V0.13 (Docker-first environment, security, privacy and
+production hardening) is summarized in §24 and documented in
+[`docker-development.md`](docker-development.md), [`security.md`](security.md) and
+[`privacy.md`](privacy.md). V0.12 Application Tracking (the lifecycle after an
 application exists: statuses, an append-only history, manual control) is summarized in §23 and
 documented in full in [`application-tracking.md`](application-tracking.md).
 V0.11 Review & Submit (the first version that may
@@ -141,9 +144,11 @@ described in §10.
 
 Email/password registration and login, bcrypt-hashed passwords (via the
 `bcrypt` library directly — not `passlib`, which has known compatibility
-issues with modern `bcrypt` releases), and stateless JWT access tokens
-(`python-jose`). `app/api/deps.py` provides a `get_current_user` dependency
-used to protect routes. No OAuth provider is implemented in V0; the
+issues with modern `bcrypt` releases), and JWT access tokens (`python-jose`).
+`app/api/deps.py` provides a `get_current_user` dependency used to protect
+routes. Since V0.13 every token belongs to a server-side `auth_sessions` row
+(`sid` claim) that is checked on each request, so logout and "log out
+everywhere" revoke tokens immediately; sign-in and sign-up are throttled (§24). No OAuth provider is implemented in V0; the
 dependency-injection shape makes adding one later (e.g. LinkedIn or Google
 OAuth) additive rather than a redesign.
 
@@ -961,3 +966,44 @@ User → UserJob → Application ──┬── status (current)  ◄── one
 
 Migration `d6a3f1b8c2e5` (replaces the status type with an explicit mapping, adds three columns and the
 history table, backfills history for existing applications; downgrade → upgrade tested with data).
+
+## 24. V0.13 — Docker-first environment, security, privacy & production hardening
+
+No new product feature: V0.13 makes the system easy to run and harder to misuse.
+
+- **Startup as a pipeline, not a hope.** `docker-compose.yml` runs `postgres` → `backend` →
+  `frontend` (+ the opt-in `seed`), each gated on the previous one's health check. The
+  backend entrypoint runs `app/db/migrate.py` (bounded wait for the database, PostgreSQL
+  advisory lock, `alembic upgrade head`, verification; non-zero exit on any failure) before
+  `uvicorn`. `/health` is liveness; `/health/ready` is readiness (database reachable and
+  schema at the code's Alembic head). `tests/test_startup.py` takes an empty database through
+  migrate → seed → login.
+- **Sessions.** `auth_sessions` (id = the token's `sid`, user, created, expires, revoked; no
+  IP/device data). `get_current_user` = signature + expiry + an open session, one query.
+- **Throttling.** `app/core/rate_limit.py`: in-process sliding windows per account (hashed
+  e-mail) and per client address for sign-in, per address for sign-up.
+- **HTTP layer.** Pure-ASGI middleware, outermost first: security headers → CORS (explicit
+  origins, no credentials) → body size limit → app. The frontend sets its own CSP and headers
+  in `next.config.ts`.
+- **Browser egress filter.** `automation/browser/egress_proxy.py`: when private hosts are not
+  allowed, each Chromium the assistant launches gets its own in-process forward proxy (on the
+  Playwright worker loop) that resolves, checks and pins every destination; the V0.10 route
+  guard remains as a first layer.
+- **Privacy services** (`app/services/privacy/`): `inventory.py` classifies every table as
+  user-owned (by category) or shared — the single source for the overview, the export
+  (`export.py`, ZIP of JSON + files) and deletion (`deletion.py`: close live browsers, delete
+  the user row so ON DELETE CASCADE removes everything owned, then the user's file folder via
+  `FileStorage.delete_owner`). `preferences.py` records the external-AI-processing choice in
+  `consent_records` (append-only, versioned).
+- **AI gate and minimization.** `get_user_ai_provider` wraps the configured provider: a user
+  who switched AI processing off gets a provider that refuses (`AI_DISABLED_BY_USER`) before
+  anything is sent. `app/ai/pseudonymize.py` replaces e-mail addresses and phone numbers in
+  resume text with placeholders and restores them in the structured result.
+- **Configuration safety.** `validate_security` (in `get_settings`) refuses wildcard CORS
+  everywhere and development secrets/credentials or private browser hosts in production,
+  without echoing configured values.
+- **Frontend.** Settings → Privacy & data (`components/privacy/`), server-side logout,
+  `lib/consent.ts` (consent architecture with no optional category registered today).
+
+Migration `e9c4b2a7d1f3` (auth_sessions, consent_records, users.external_ai_processing_allowed;
+tokens issued before it carry no session and are no longer accepted — users sign in once).

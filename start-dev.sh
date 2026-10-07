@@ -1,298 +1,157 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# JobPilot local environment -- a thin wrapper around Docker Compose.
+#
+# Only Docker (with the Compose plugin) is required on this machine: no PostgreSQL, psql,
+# Python or Node.js. Every command below runs inside the containers.
+#
+#   ./start-dev.sh                 start everything (= up)
+#   ./start-dev.sh up              build and start db, backend (migrates on start), frontend
+#   ./start-dev.sh test-data       start everything AND load the synthetic test user
+#   ./start-dev.sh seed [--reset]  load the test user into a running stack (--reset: recreate it)
+#   ./start-dev.sh reset           delete ALL local data (database + uploads), start fresh with test data
+#   ./start-dev.sh status          services and their health
+#   ./start-dev.sh logs [service]  follow logs (backend, frontend, postgres, seed)
+#   ./start-dev.sh down            stop (data is kept)
+#   ./start-dev.sh smoke           clean-start test: wipe, build, start, seed, log in, check, report
+#
+# Test account (after test-data / seed / reset): test.user@example.com / TestPassword123!
+set -euo pipefail
 
-# JobPilot Development Server Startup Script
-# This script helps you start the full development environment
+cd "$(dirname "$0")"
 
-set -e
+COMPOSE=(docker compose)
+FRONTEND_URL="http://localhost:${FRONTEND_PORT:-3000}"
+API_URL="http://localhost:${BACKEND_PORT:-8000}"
 
-# Color output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Configuration
-POSTGRES_PORT=${POSTGRES_PORT:-5432}
-BACKEND_PORT=${BACKEND_PORT:-8000}
-FRONTEND_PORT=${FRONTEND_PORT:-3000}
-DATABASE_URL="postgresql+psycopg://jobpilot:jobpilot@localhost:${POSTGRES_PORT}/jobpilot"
-
-# Functions
-print_header() {
-    echo -e "\n${GREEN}=== $1 ===${NC}\n"
-}
-
-print_error() {
-    echo -e "${RED}✗ $1${NC}"
-}
-
-print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
-}
-
-print_info() {
-    echo -e "${YELLOW}ℹ $1${NC}"
-}
-
-check_postgres() {
-    print_header "Checking PostgreSQL"
-
-    if ! command -v psql &> /dev/null; then
-        print_error "psql not found. Please install PostgreSQL client."
-        return 1
+need_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        echo "Docker is not installed. Install Docker Desktop (or Docker Engine + Compose plugin)." >&2
+        exit 1
     fi
-
-    print_success "PostgreSQL client found"
-    return 0
+    if ! docker compose version >/dev/null 2>&1; then
+        echo "The Docker Compose plugin is missing ('docker compose version' failed)." >&2
+        exit 1
+    fi
+    if ! docker info >/dev/null 2>&1; then
+        echo "The Docker daemon is not running. Start Docker Desktop / dockerd and retry." >&2
+        exit 1
+    fi
 }
 
-check_python() {
-    print_header "Checking Python"
-
-    if ! command -v python3 &> /dev/null; then
-        print_error "Python 3 not found. Please install Python 3.11+"
-        return 1
-    fi
-
-    PYTHON_VERSION=$(python3 --version | awk '{print $2}')
-    print_success "Python $PYTHON_VERSION found"
-    return 0
+banner() {
+    echo
+    echo "  JobPilot is running:  ${FRONTEND_URL}"
+    echo "  API:                  ${API_URL}/health/ready"
+    echo
 }
 
-check_node() {
-    print_header "Checking Node.js"
-
-    if ! command -v node &> /dev/null; then
-        print_error "Node.js not found. Please install Node.js 20+"
-        return 1
-    fi
-
-    NODE_VERSION=$(node --version)
-    print_success "Node.js $NODE_VERSION found"
-    return 0
+credentials() {
+    echo "  Test account:  test.user@example.com / TestPassword123!"
+    echo
 }
 
-check_docker() {
-    print_header "Checking Docker"
+cmd="${1:-up}"
+shift || true
 
-    if ! command -v docker &> /dev/null; then
-        print_error "Docker not found. Please install Docker."
-        return 1
-    fi
-
-    print_success "Docker found"
-
-    if ! command -v docker-compose &> /dev/null; then
-        print_error "docker-compose not found. Please install Docker Compose."
-        return 1
-    fi
-
-    print_success "docker-compose found"
-    return 0
-}
-
-start_postgres() {
-    print_header "Starting PostgreSQL"
-
-    if docker-compose ps | grep -q "jobpilot-postgres"; then
-        print_info "PostgreSQL already running"
-        return 0
-    fi
-
-    docker-compose up -d postgres
-    print_success "PostgreSQL started"
-
-    # Wait for it to be ready
-    print_info "Waiting for PostgreSQL to be ready..."
-    for i in {1..30}; do
-        if psql -U jobpilot -h localhost -d jobpilot -c "SELECT 1" &> /dev/null; then
-            print_success "PostgreSQL is ready"
-            return 0
+case "$cmd" in
+    up)
+        need_docker
+        "${COMPOSE[@]}" up --build --detach --wait
+        banner
+        ;;
+    test-data)
+        need_docker
+        "${COMPOSE[@]}" --profile manual-test up --build --detach --wait backend frontend
+        "${COMPOSE[@]}" run --rm seed
+        banner
+        credentials
+        ;;
+    seed)
+        need_docker
+        "${COMPOSE[@]}" run --rm seed "$@"
+        ;;
+    reset)
+        need_docker
+        echo "This deletes ALL local JobPilot data (database and uploaded files)."
+        if [ "${1:-}" != "--yes" ]; then
+            read -r -p "Type 'yes' to continue: " answer
+            [ "$answer" = "yes" ] || { echo "Cancelled."; exit 1; }
         fi
-        echo -n "."
-        sleep 1
-    done
-
-    print_error "PostgreSQL failed to start"
-    return 1
-}
-
-setup_backend() {
-    print_header "Setting up Backend"
-
-    cd backend
-
-    if [ ! -d "venv" ]; then
-        print_info "Creating virtual environment..."
-        python3 -m venv venv
-    fi
-
-    source venv/bin/activate
-
-    if ! pip show -q sqlalchemy &> /dev/null; then
-        print_info "Installing Python dependencies..."
-        pip install -q -r requirements.txt
-    fi
-    print_success "Python dependencies installed"
-
-    # Run migrations
-    print_info "Running database migrations..."
-    alembic upgrade head
-    print_success "Migrations complete"
-
-    # Check if database needs seeding
-    USER_COUNT=$(psql -U jobpilot -h localhost -d jobpilot -t -c "SELECT COUNT(*) FROM users" 2>/dev/null || echo "0")
-    if [ "$USER_COUNT" -eq "0" ]; then
-        print_info "Seeding test data..."
-        python -m scripts.seed_manual_test_data
-        print_success "Test data seeded"
-    else
-        print_info "Database already has data, skipping seed"
-    fi
-
-    cd ..
-}
-
-setup_frontend() {
-    print_header "Setting up Frontend"
-
-    cd frontend
-
-    if [ ! -d "node_modules" ]; then
-        print_info "Installing Node dependencies..."
-        npm install -q
-    fi
-    print_success "Node dependencies installed"
-
-    cd ..
-}
-
-usage() {
-    cat << EOF
-
-${GREEN}JobPilot Development Environment${NC}
-
-Usage:
-    $0 [COMMAND]
-
-Commands:
-    help         Show this help message
-    check        Check prerequisites
-    postgres     Start PostgreSQL only
-    setup        Setup backend and frontend (without starting)
-    backend      Start backend server
-    frontend     Start frontend dev server
-    all          Start everything (postgres, backend, frontend)
-
-Examples:
-    # First time: check everything and setup
-    $0 check
-    $0 setup
-
-    # Start everything
-    $0 all
-
-    # Or start each component separately
-    $0 postgres    # Terminal 1
-    $0 backend     # Terminal 2
-    $0 frontend    # Terminal 3
-
-Test Credentials:
-    Email: test.user@example.local
-    Password: TestPassword123!
-
-Frontend URL: http://localhost:3000
-Backend URL: http://localhost:8000/api/v1
-
-EOF
-}
-
-# Main script
-if [ $# -eq 0 ]; then
-    usage
-    exit 0
-fi
-
-COMMAND=$1
-
-case $COMMAND in
-    help)
-        usage
+        "${COMPOSE[@]}" --profile manual-test down --volumes --remove-orphans
+        "${COMPOSE[@]}" up --build --detach --wait
+        "${COMPOSE[@]}" run --rm seed
+        banner
+        credentials
         ;;
-    check)
-        check_docker || exit 1
-        check_python || exit 1
-        check_node || exit 1
-        check_postgres || exit 1
-        print_success "All prerequisites met!"
+    status)
+        need_docker
+        "${COMPOSE[@]}" ps --all
         ;;
-    postgres)
-        check_docker || exit 1
-        start_postgres || exit 1
-        print_info "Press Ctrl+C to stop PostgreSQL"
-        docker-compose logs -f postgres
+    logs)
+        need_docker
+        "${COMPOSE[@]}" logs --follow "$@"
         ;;
-    setup)
-        check_docker || exit 1
-        check_python || exit 1
-        check_node || exit 1
-        check_postgres || exit 1
-        start_postgres || exit 1
-        setup_backend || exit 1
-        setup_frontend || exit 1
-        print_success "Setup complete!"
-        echo ""
-        print_info "Next steps:"
-        echo "  1. Start PostgreSQL in a separate terminal: $0 postgres"
-        echo "  2. Start backend in another terminal: $0 backend"
-        echo "  3. Start frontend in another terminal: $0 frontend"
-        echo "  Or start everything at once: $0 all"
+    down)
+        need_docker
+        "${COMPOSE[@]}" --profile manual-test down
         ;;
-    backend)
-        cd backend
-        if [ ! -d "venv" ]; then
-            print_error "Virtual environment not found. Run: $0 setup"
-            exit 1
-        fi
-        source venv/bin/activate
-        print_header "Starting Backend Server"
-        print_info "Backend running at http://localhost:${BACKEND_PORT}/api/v1"
-        print_info "Press Ctrl+C to stop"
-        uvicorn app.main:app --reload --host 0.0.0.0 --port ${BACKEND_PORT}
-        ;;
-    frontend)
-        cd frontend
-        if [ ! -d "node_modules" ]; then
-            print_error "node_modules not found. Run: $0 setup"
-            exit 1
-        fi
-        print_header "Starting Frontend Dev Server"
-        print_info "Frontend running at http://localhost:${FRONTEND_PORT}"
-        print_info "Press Ctrl+C to stop"
-        npm run dev
-        ;;
-    all)
-        print_header "Starting Full Development Environment"
-        print_info "Note: This will start processes in this terminal."
-        print_info "For better control, run each in separate terminals:"
-        echo "  Terminal 1: $0 postgres"
-        echo "  Terminal 2: $0 backend"
-        echo "  Terminal 3: $0 frontend"
-        echo ""
-        read -p "Continue starting all services? (y/N) " -n 1 -r
+    smoke)
+        # The release check for the local environment (V0.13): from nothing to a logged-in
+        # dashboard, exactly as a tester would do it. Fails loudly at the first problem.
+        need_docker
+        echo "==> Wiping local state"
+        "${COMPOSE[@]}" --profile manual-test down --volumes --remove-orphans
+        echo "==> Building and starting (migrations run on backend start)"
+        "${COMPOSE[@]}" up --build --detach --wait
+        echo "==> Seeding the test user"
+        "${COMPOSE[@]}" run --rm seed
+        echo "==> Checking readiness"
+        "${COMPOSE[@]}" exec -T backend python -c "
+import json, urllib.request
+r = json.load(urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5))
+assert r == {'status': 'ok', 'database': 'ok'}, r
+print('   readiness:', r)
+"
+        echo "==> Logging in as the test user and reading the dashboard data"
+        "${COMPOSE[@]}" exec -T backend python -c "
+import json, urllib.request
+api = 'http://127.0.0.1:8000/api/v1'
+def call(path, body=None, token=None):
+    req = urllib.request.Request(api + path, method='POST' if body is not None else 'GET')
+    req.add_header('Content-Type', 'application/json')
+    if token: req.add_header('Authorization', 'Bearer ' + token)
+    data = json.dumps(body).encode() if body is not None else None
+    return json.load(urllib.request.urlopen(req, data, timeout=10))
+token = call('/auth/login', {'email': 'test.user@example.com', 'password': 'TestPassword123!'})['access_token']
+me = call('/users/me', token=token)
+summary = call('/applications/summary', token=token)
+jobs = call('/jobs?page=1&page_size=50', token=token)
+assert me['email'] == 'test.user@example.com', me
+assert summary['total'] == 5, summary
+assert jobs['total'] == 7, jobs['total']
+print('   login ok as', me['email'], '| applications:', summary['total'], '| jobs:', jobs['total'])
+"
+        echo "==> Checking the database schema"
+        "${COMPOSE[@]}" exec -T backend python -m app.db.migrate --check
+        echo "==> Checking the frontend"
+        "${COMPOSE[@]}" exec -T frontend node -e "
+fetch('http://127.0.0.1:3000/login').then(r => {
+  if (!r.ok) { console.error('frontend /login', r.status); process.exit(1); }
+  if (!r.headers.get('content-security-policy')) { console.error('no CSP header'); process.exit(1); }
+  console.log('   frontend /login', r.status, '(CSP set)');
+}).catch(e => { console.error(e); process.exit(1); })
+"
         echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            check_docker || exit 1
-            check_python || exit 1
-            check_node || exit 1
-            start_postgres || exit 1
-            print_success "All services ready"
-            print_info "Open http://localhost:3000 in your browser"
-        fi
+        echo "SMOKE TEST PASSED"
+        banner
+        credentials
+        ;;
+    -h|--help|help)
+        sed -n '2,17p' "$0"
         ;;
     *)
-        print_error "Unknown command: $COMMAND"
-        usage
+        echo "Unknown command: $cmd" >&2
+        sed -n '2,17p' "$0" >&2
         exit 1
         ;;
 esac

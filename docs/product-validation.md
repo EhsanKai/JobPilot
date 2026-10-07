@@ -364,7 +364,7 @@ List any issues discovered that are expected or have workarounds:
 
 ### Test Data Summary
 
-- Test User Email: `test.user@example.local`
+- Test User Email: `test.user@example.com`
 - Test Jobs Created: 8
 - Applications Created: 6
 - CVs Generated: [number]

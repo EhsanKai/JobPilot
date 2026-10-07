@@ -4,65 +4,56 @@ This guide provides step-by-step instructions to manually test JobPilot as an en
 
 ## Setup
 
-### Prerequisites
-
-- PostgreSQL 16
-- Python 3.11+
-- Node.js 20+
-- Docker (for PostgreSQL)
-
-### 1. Start the Database
+Only Docker is needed (Docker Desktop, or Docker Engine with the Compose plugin). No
+PostgreSQL, Python, Node.js or `psql` on your machine. Details: `docs/docker-development.md`.
 
 ```bash
-docker-compose up -d postgres
-# Wait for the database to be ready (about 10 seconds)
+cp .env.example .env                                  # optional: defaults work as they are
+docker compose --profile manual-test up --build       # database, migrations, API, UI, test data
 ```
 
-### 2. Prepare the Backend
+Wait for `seed-1 | Seeded synthetic manual-test data:` in the output, then open
+http://localhost:3000. (In another terminal, `./start-dev.sh status` shows the services.)
 
-```bash
-cd backend
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-
-# Run migrations
-alembic upgrade head
-
-# Seed the database with test data
-python -m scripts.seed_manual_test_data
-```
-
-### 3. Start the Backend
-
-```bash
-# From backend/ with venv activated
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-The backend will be available at `http://localhost:8000/api/v1`.
-
-### 4. Start the Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The frontend will be available at `http://localhost:3000`.
+The database schema is created and upgraded automatically every time the backend starts;
+you never run migrations by hand.
 
 ## Test Account Credentials
 
-After seeding, use:
-
-- **Email**: `test.user@example.local`
+- **Email**: `test.user@example.com`
 - **Password**: `TestPassword123!`
+
+`example.com` is a domain reserved for examples (RFC 2606) and passes JobPilot's real
+e-mail validation. (Earlier notes used `test.user@example.local`; `.local` is a special-use
+name that the validation correctly rejects, so that account could never log in.)
+
+### What the seed creates
+
+All synthetic -- the person, "Musterfirma Demo GmbH" and its postings do not exist:
+
+- Max Mustermann, Senior Software Engineer in Munich: profile, 8 skills, German / English /
+  Spanish, job preferences (Senior Backend Engineer, Munich/Berlin, hybrid/remote, EUR
+  75-90k, deal breaker: working-student roles).
+- One resume (DOCX), uploaded but **not analyzed**: analysis needs an AI provider
+  (`ANTHROPIC_API_KEY` in `.env`).
+- 7 jobs from the real discovery pipeline (8 postings: one job is on Greenhouse AND Lever):
+
+  | Job | Scenario |
+  |---|---|
+  | Senior Python Backend Engineer (Munich) | excellent match; on both sources |
+  | Senior Full-Stack Engineer (TypeScript / Python), remote | good match |
+  | Staff Platform Engineer (Berlin) | partial match (Kubernetes, Go missing) |
+  | Data Engineer (Spark / Scala), Frankfurt | weak match |
+  | Junior Frontend Developer (Vue.js), Hamburg | seniority mismatch; **saved** |
+  | Engineering Manager Backend (Munich) | management role |
+  | Working Student Software Development (Köln, Lever only) | deal breaker |
+
+- Applications: PREPARING (Senior Python Backend Engineer), APPLIED with a follow-up date
+  in 7 days (Full-Stack), INTERVIEW (Staff Platform), REJECTED (Data Engineer), WITHDRAWN
+  (Engineering Manager).
+
+The postings' "apply" links point at pages that do not exist; use the Browser Assistant
+against a real posting (or the E2E fake site) to test form filling.
 
 ## Test Flow
 
@@ -181,7 +172,7 @@ After seeding, use:
 **Steps**:
 1. From dashboard, click "Jobs" in navigation
 2. Review the job list:
-   - Should show 8 test jobs
+   - Should show 7 jobs (8 postings; one job has two sources)
    - Jobs have source labels (Greenhouse, Lever, etc.)
    - Can see job title, company, location, salary range
 
@@ -206,21 +197,14 @@ After seeding, use:
    - Verify save status persists
 
 **Expected Results**:
-- ✓ Job list loads with 8 jobs
+- ✓ Job list loads with 7 jobs
 - ✓ Job details page is readable
 - ✓ Filters work correctly
 - ✓ Save/unsave works
-- ✓ Cross-source duplicate (DevOps Engineer) shows "Sources: Greenhouse + Lever"
+- ✓ The cross-source job (Senior Python Backend Engineer) shows both sources
 
-**Known Test Jobs**:
-- Job A: "Senior Backend Engineer" - Excellent match
-- Job B: "Full-Stack Engineer" - Good match
-- Job C: "Java Developer" - Weak match  
-- Job D: "Senior Platform Engineer" - Missing information (no salary/work model)
-- Job E: "Mid-Level Software Engineer" - Deal breaker (fully on-site)
-- Job F: "DevOps Engineer" - Cross-source duplicate
-- Job G: "Senior Softwareentwickler" - German posting
-- Job H: "QA Engineer (Expired)" - Inactive job
+**Seeded jobs**: see "What the seed creates" above. The cross-source job is
+"Senior Python Backend Engineer" (Greenhouse + Lever).
 
 **Document Findings**:
 - [ ] All jobs display correctly
@@ -235,7 +219,7 @@ After seeding, use:
 **Objective**: Verify matching engine and match explanations.
 
 **Steps**:
-1. From job list, click on Job A ("Senior Backend Engineer")
+1. From job list, click on "Senior Python Backend Engineer"
 2. Review the match card (should be visible on job details):
    - Job Match score (technical fit)
    - Preference Match score (preference fit)
@@ -548,9 +532,9 @@ After seeding, use:
 3. Click on an application to view details
 4. Test status transitions:
    - Click application
-   - Change status from PREPARING → SUBMITTED
+   - Change status from PREPARING → APPLIED
    - Verify status persists
-   - Try other transitions (SUBMITTED → INTERVIEWING, etc.)
+   - Try other transitions (APPLIED → INTERVIEW, etc.)
 
 5. Test notes:
    - Add a note to the application
@@ -689,18 +673,17 @@ Before finishing, do a basic security check:
 
 ## Data Reset
 
-If you need to start over, reset the database:
+Re-create only the test user (other accounts you registered stay):
 
 ```bash
-cd backend
-python -m scripts.seed_manual_test_data --reset
+./start-dev.sh seed --reset          # = docker compose run --rm seed --reset
 ```
 
-This will:
-1. Drop the database
-2. Run migrations
-3. Seed fresh test data
-4. Provide new test credentials
+Wipe everything (database AND uploaded files) and start from an empty database:
+
+```bash
+./start-dev.sh reset                 # = docker compose down -v, then up again with the seed
+```
 
 ---
 
@@ -712,8 +695,8 @@ After testing, mark these items:
 - [ ] Login works with test credentials
 - [ ] Dashboard displays and shows real KPI numbers
 - [ ] Profile displays and can be edited
-- [ ] Resume displays from seeded data
-- [ ] Jobs discovery shows all 8 test jobs
+- [ ] Seeded resume is listed (analysis needs an AI key)
+- [ ] Jobs list shows the 7 seeded jobs
 - [ ] Job matching engine calculates scores
 - [ ] Application workspace opens for a job
 - [ ] CV generation creates realistic content
@@ -734,8 +717,7 @@ After testing, mark these items:
 - [ ] No invented information in generated documents
 - [ ] Resume facts are preserved
 - [ ] Application data persists
-- [ ] Cross-source duplicate (Job F) detected correctly
-- [ ] German job posting works in German
+- [ ] Cross-source job (Senior Python Backend Engineer) shows both sources
 
 ### Safety & Security
 - [ ] Can't access other users' data
@@ -744,40 +726,23 @@ After testing, mark these items:
 - [ ] Submission verification works
 
 ### Known Working Scenarios
-- [ ] Test Job A (Excellent match) scores highest
-- [ ] Test Job C (Weak match) scores lower
-- [ ] Test Job E (Deal-breaker) shows warning
-- [ ] Test Job D (Missing info) handles unknowns
-- [ ] Cross-source Job F shows both sources
+- [ ] Senior Python Backend Engineer has the best match
+- [ ] Data Engineer (Spark / Scala) scores low
+- [ ] Working Student role is flagged by the deal breaker
+- [ ] Junior Frontend Developer shows the seniority mismatch
+- [ ] Privacy settings: download my data, AI switch, delete account (V0.13)
 
 ---
 
 ## Troubleshooting
 
-### Backend won't start
-- Ensure PostgreSQL is running: `docker-compose ps`
-- Ensure DATABASE_URL is correct in `.env`
-- Check database exists: `psql -U jobpilot -d jobpilot`
+See `MANUAL_TESTING.md` > Troubleshooting. The most useful commands:
 
-### Frontend won't start  
-- Ensure Node modules are installed: `npm install`
-- Ensure `NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1` in frontend `.env.local`
-- Clear `.next` cache: `rm -rf .next`
-
-### Seeding fails
-- Ensure migrations ran: `alembic upgrade head`
-- Ensure database is clean: `python -m scripts.seed_manual_test_data --reset`
-- Check database connection: `psql -U jobpilot -d jobpilot -c "SELECT 1"`
-
-### Jobs aren't appearing
-- Verify job source postings were created
-- Check job discovery is enabled
-- Verify jobs are associated with the test user
-
-### Application submission fails
-- Check backend logs for errors
-- Verify all required fields are filled
-- Ensure no validation errors on final review
+```bash
+./start-dev.sh status        # which service is up / healthy
+./start-dev.sh logs backend  # migration and API log
+./start-dev.sh reset         # clean slate
+```
 
 ---
 

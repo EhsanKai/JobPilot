@@ -13,8 +13,24 @@ foundations (data model and taxonomy), **V0.6 — Job Matching &
 Explainability**, **V0.7 — Application Workspace**, **V0.8 — Tailored CV &
 Anschreiben Generation**, **V0.9 — Application Question AI + Human Control at
 Every Stage**, **V0.10 — Browser Automation & Human-Controlled Application
-Filling**, **V0.11 — Review & Submit** and **V0.12 — Application Tracking
-Foundation**.
+Filling**, **V0.11 — Review & Submit**, **V0.12 — Application Tracking
+Foundation** and **V0.13 — Dockerized Testing + Security, Privacy & Production
+Hardening**.
+
+## Quick start (Docker only)
+
+```bash
+git clone https://github.com/EhsanKai/JobPilot.git
+cd JobPilot
+cp .env.example .env                                  # optional: the defaults work
+docker compose --profile manual-test up --build
+```
+
+Open http://localhost:3000 and log in as `test.user@example.com` / `TestPassword123!`.
+Nothing but Docker is needed: the database schema is migrated automatically when the
+backend starts, and the `manual-test` profile loads a synthetic test user. Reset with
+`docker compose down -v`. Details: [`MANUAL_TESTING.md`](MANUAL_TESTING.md),
+[`docs/docker-development.md`](docs/docker-development.md).
 
 ## 1. What JobPilot is
 
@@ -22,7 +38,7 @@ JobPilot aims to automate the tedious parts of job hunting: tracking
 preferences, tailoring documents, and filling out applications — while
 keeping the user in control of what gets submitted and where.
 
-## 2. Current scope (V0 – V0.12)
+## 2. Current scope (V0 – V0.13)
 
 V0 is a clean, production-oriented foundation. V0.1 turns the basic profile
 from V0 into a structured Job Search Profile with enough detail for a future
@@ -313,6 +329,39 @@ No AI, e-mail, calendar or automatic status inference. See
 [`docs/application-tracking.md`](docs/application-tracking.md). Not in V0.12: AI follow-ups,
 interview preparation, offer negotiation, inbox / calendar integration, reminders, bulk actions.
 
+V0.13 makes **Docker the easiest path, and hardens security and privacy** — without adding
+product features or tracking.
+
+- **Docker-first environment.** `docker compose up --build` runs PostgreSQL, the backend and
+  the frontend; the backend waits for the database, runs every Alembic migration and only
+  then starts (a failed migration stops it loudly). `/health/ready` checks the database and
+  the schema version; the frontend starts only when the backend is ready. This fixes the
+  `relation "users" does not exist` failure of the manual test setup. Synthetic test data:
+  `docker compose --profile manual-test up` (account `test.user@example.com` — `.local`
+  addresses are rejected by the real e-mail validation, as they should be).
+- **Authentication.** Server-side sessions (logout really ends a token; "log out
+  everywhere"), throttling of failed sign-ins and sign-ups (HTTP 429), no account enumeration
+  through sign-in timing, passwords beyond bcrypt's 72 bytes refused instead of truncated.
+- **Browser Assistant SSRF fix.** All browser traffic goes through an egress filter that
+  refuses private, loopback and metadata addresses — including redirect hops and a page's
+  own requests, which the V0.10 guard missed.
+- **Uploads, HTTP, config.** Content-verified uploads, request size limit, security headers
+  and CSP on API and frontend, strict CORS, no echo of submitted values in errors, no secrets
+  or content in logs, production refuses development secrets and credentials.
+- **Privacy & data** (Settings): what JobPilot stores and why, **download my data** (JSON +
+  your files), **delete my account** (password + confirmation phrase; everything you own is
+  removed, shared job ads stay), an **external AI processing** switch enforced server-side,
+  recorded and revocable, and cookie preferences (JobPilot uses no optional cookies, so there
+  is no banner — the consent architecture is ready for when that changes).
+- **AI data minimization.** E-mail addresses and phone numbers are replaced by placeholders
+  before a resume goes to the AI provider; documents and answers never receive contact
+  details or salary.
+
+Technical privacy and security controls are implemented; legal compliance requires a final
+legal review. See [`docs/security.md`](docs/security.md) and [`docs/privacy.md`](docs/privacy.md).
+Not in V0.13: MFA, password reset, e-mail verification, automatic retention/deletion
+schedules, cloud deployment.
+
 ## 3. Tech stack
 
 | Layer      | Technology                                             |
@@ -323,7 +372,7 @@ interview preparation, offer negotiation, inbox / calendar integration, reminder
 | Job sources | Provider-agnostic `JobSource`; Greenhouse + Lever (httpx) |
 | Extraction | pypdf (PDF), python-docx (DOCX)                          |
 | Database   | PostgreSQL                                              |
-| Infra      | Docker Compose (PostgreSQL)                             |
+| Infra      | Docker Compose (PostgreSQL, backend, frontend; non-root images) |
 | Testing    | Pytest (backend), Vitest + Testing Library (frontend), Playwright (E2E) |
 
 ## 4. Project structure
@@ -333,10 +382,11 @@ jobpilot/
 ├── frontend/           Next.js app (App Router)
 │   ├── app/            Routes: /, /login, /register, /dashboard, /profile, /jobs,
 │   │                     /applications/[id], ...
-│   ├── components/     Reusable UI, auth, profile, resume, dashboard components
-│   ├── lib/             API client, auth token storage, typed API calls
+│   ├── components/     Reusable UI, auth, profile, resume, dashboard, privacy components
+│   ├── lib/             API client, auth token storage, typed API calls, consent (V0.13)
 │   ├── types/           Shared TypeScript types mirroring backend schemas
-│   └── e2e/             Playwright real-browser tests
+│   ├── e2e/             Playwright real-browser tests
+│   └── Dockerfile       production build, standalone server, non-root (V0.13)
 │
 ├── backend/
 │   ├── app/
@@ -347,9 +397,10 @@ jobpilot/
 │   │   │                  matching (V0.6), applications (V0.7),
 │   │   │                  documents (V0.8), questions (V0.9),
 │   │                  automation (V0.10); application tracking (V0.12) is
-│   │                  part of applications
-│   │   ├── core/        Config, security, logging, error handling
-│   │   ├── db/          SQLAlchemy base + session
+│   │                  part of applications; privacy (V0.13)
+│   │   ├── core/        Config (+ production checks), passwords and tokens, rate
+│   │   │                  limiting, HTTP security middleware, logging, errors
+│   │   ├── db/          SQLAlchemy base + session, migrate.py (startup migrations)
 │   │   ├── models/      SQLAlchemy models
 │   │   ├── schemas/     Pydantic request/response schemas
 │   │   └── services/    Business logic, storage abstraction, resume_intelligence/
@@ -359,10 +410,15 @@ jobpilot/
 │   │                      state_machine, tracking),
 │   │                      documents/ (V0.8: facts, context, validation),
 │   │                      questions/ (V0.9), automation/ (V0.10: browser/,
-│   │                      discovery, mapping, resolver, filler, controller)
+│   │                      discovery, mapping, resolver, filler, controller;
+│   │                      V0.13: browser/egress_proxy), privacy/ (V0.13:
+│   │                      inventory, export, deletion, preferences)
 │   ├── alembic/         Database migrations
 │   ├── e2e/             Backend launcher for real-browser E2E (mock job boards, stub AI)
-│   └── tests/           Pytest suite
+│   ├── scripts/         seed_manual_test_data.py (synthetic manual-test user)
+│   ├── tests/           Pytest suite
+│   ├── Dockerfile       Ubuntu 24.04 + headless Chromium, non-root (V0.13)
+│   └── docker-entrypoint.sh   migrate, then start the API
 │
 ├── docs/
 │   ├── architecture.md
@@ -373,90 +429,89 @@ jobpilot/
 │   ├── application-workspace.md
 │   ├── tailored-documents.md
 │   ├── application-questions.md
-│   └── browser-automation.md
+│   ├── browser-automation.md
+│   ├── application-tracking.md
+│   ├── docker-development.md   (V0.13)
+│   ├── security.md             (V0.13)
+│   └── privacy.md              (V0.13)
 │
-├── docker-compose.yml   PostgreSQL (dev infrastructure)
+├── docker-compose.yml   postgres + backend + frontend (+ seed, profile manual-test)
+├── start-dev.sh         Docker wrapper: up, test-data, seed, reset, status, logs, smoke
+├── MANUAL_TESTING.md    Docker-only manual test quick start
 ├── .env.example
 └── README.md
 ```
 
 ## 5. Prerequisites
 
-- Python 3.11+
-- Node.js 20+ and npm
-- Docker (for PostgreSQL) — or a local PostgreSQL 16 instance
+- **Docker** with the Compose plugin — that is all for running and testing JobPilot.
+- For contributors working on the host: Python 3.12 and Node.js 22 (see
+  [`docs/docker-development.md`](docs/docker-development.md#host-development-contributors)).
 
 ## 6. Environment setup
 
 ```bash
-cp .env.example .env
+cp .env.example .env    # optional: every value has a safe local default
 ```
 
-Edit `.env` as needed. Never commit `.env` — it's gitignored. Key variables:
+Never commit `.env` — it's gitignored. Key variables (all documented in `.env.example`):
 
-- `SECRET_KEY` — JWT signing secret. Use a long random string in any
-  non-local environment.
-- `DATABASE_URL` — SQLAlchemy connection string for the backend.
-- `STORAGE_PROVIDER` / `STORAGE_PATH` — resume storage backend (`local` in V0).
-- `NEXT_PUBLIC_API_URL` — base URL the frontend uses to reach the backend API.
-- `AI_PROVIDER` / `ANTHROPIC_API_KEY` / `AI_MODEL` — the AI provider for resume
-  analysis (V0.2). Without an API key, everything else works and resume
-  analysis reports "AI provider not configured". See
-  [`docs/resume-intelligence.md`](docs/resume-intelligence.md#configuration-environment-only)
-  for all AI-related settings.
-- `JOB_SOURCES_ENABLED` / `GREENHOUSE_BOARD_TOKENS` / `LEVER_SITES` /
-  `LEVER_INSTANCE`: which job sources and company boards Job Discovery
-  (V0.3) reads. The sources are public APIs and need no credentials. See
+- `APP_ENV` — `development` | `test` | `production`. Production refuses to start with the
+  development `SECRET_KEY`, the `jobpilot/jobpilot` database credentials, wildcard CORS or
+  private browser hosts.
+- `SECRET_KEY` — JWT signing secret (production: ≥ 32 random characters).
+- `POSTGRES_*`, and `DATABASE_URL` for host development only (in Compose the backend always
+  uses the `postgres` service).
+- `NEXT_PUBLIC_API_URL` — the URL the *browser* uses for the API (public; compiled into the
+  frontend bundle).
+- `AI_PROVIDER` / `ANTHROPIC_API_KEY` / `AI_MODEL` — the AI provider. Without an API key,
+  everything else works and AI features report "AI provider not configured". See
+  [`docs/resume-intelligence.md`](docs/resume-intelligence.md#configuration-environment-only).
+  `AI_PROCESSING_DEFAULT_ALLOWED`, `AI_PSEUDONYMIZE_CONTACT_DETAILS`: see
+  [`docs/privacy.md`](docs/privacy.md).
+- `JOB_SOURCES_ENABLED` / `GREENHOUSE_BOARD_TOKENS` / `LEVER_SITES` / `LEVER_INSTANCE` —
+  which public job boards Job Discovery reads. See
   [`docs/job-discovery.md`](docs/job-discovery.md#4-configuration).
+- `LOGIN_*`, `REGISTRATION_MAX_PER_IP`, `TRUST_PROXY_HEADERS`, `MAX_REQUEST_BODY_MB` —
+  see [`docs/security.md`](docs/security.md).
 
-## 7. Start PostgreSQL
-
-```bash
-docker compose up -d
-```
-
-This starts PostgreSQL on `localhost:5432` with the credentials from `.env`.
-(If you don't have Docker available, any local PostgreSQL 16 instance with a
-matching `DATABASE_URL` works too.)
-
-## 8. Run database migrations
+## 7. Start JobPilot
 
 ```bash
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-alembic upgrade head
+docker compose up --build                          # or: ./start-dev.sh up
+docker compose --profile manual-test up --build    # ... with the synthetic test user
 ```
 
-To create a new migration after changing models:
+Frontend http://localhost:3000, API http://localhost:8000 (`/docs` in development,
+`/health` liveness, `/health/ready` readiness). Ports are bound to `127.0.0.1`.
 
-```bash
-alembic revision --autogenerate -m "describe the change"
-alembic upgrade head
-```
+## 8. Database migrations
 
-## 9. Start the backend
+Automatic: the backend container runs `python -m app.db.migrate` before it starts the API
+(wait for the database, advisory lock, `alembic upgrade head`, verify; non-zero exit on any
+failure). On the host, run the same command yourself. To create a migration after changing
+models (host development):
 
 ```bash
 cd backend
-source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+.venv/bin/alembic revision --autogenerate -m "describe the change"
+.venv/bin/python -m app.db.migrate
 ```
 
-The API is served at `http://localhost:8000`, versioned under
-`/api/v1/...` (e.g. `/api/v1/auth/register`). A health check is available at
-`GET /health`.
-
-## 10. Start the frontend
+## 9. Seed and reset
 
 ```bash
-cd frontend
-npm install
-npm run dev
+docker compose run --rm seed            # synthetic test user (idempotent)
+docker compose run --rm seed --reset    # recreate it
+docker compose down -v                  # delete ALL local data
+./start-dev.sh smoke                    # clean-start check: wipe, build, seed, log in, verify
 ```
 
-The app is served at `http://localhost:3000` and talks to the backend using
-`NEXT_PUBLIC_API_URL` (defaults to `http://localhost:8000/api/v1`).
+## 10. Host development (optional)
+
+See [`docs/docker-development.md`](docs/docker-development.md#host-development-contributors):
+`docker compose up -d postgres`, then `uvicorn app.main:app --reload` in `backend/` and
+`npm run dev` in `frontend/`.
 
 ## 11. Run tests
 
@@ -464,10 +519,9 @@ Backend:
 
 ```bash
 cd backend
-source .venv/bin/activate
-pytest                  # tests
-ruff check app tests    # lint
-mypy app                # type check
+.venv/bin/pytest                  # tests
+.venv/bin/ruff check app tests    # lint
+.venv/bin/mypy app                # type check
 ```
 
 Backend tests run against a separate `jobpilot_test` database (the
@@ -527,16 +581,24 @@ JOBPILOT_LIVE_SOURCES=1 pytest tests/test_live_sources.py
 scratch database (`<test db>_migrations`); it is skipped if your Postgres
 role can't create databases.
 
-## 12. API endpoints (V0 – V0.12)
+## 12. API endpoints (V0 – V0.13)
 
 All endpoints are versioned under `/api/v1`. Full request/response shapes
 are documented in `docs/architecture.md`.
 
 ```
-POST   /auth/register
-POST   /auth/login
-POST   /auth/logout
+POST   /auth/register                  throttled per client address (V0.13)
+POST   /auth/login                     throttled per account and address; starts a session
+POST   /auth/logout                    revokes the session on the server (V0.13)
+POST   /auth/logout-all                revokes every session of the account (V0.13)
 GET    /users/me
+
+GET    /privacy/overview               V0.13: what is stored, why, retention, recipients
+GET    /privacy/export                 V0.13: ZIP with all your data (JSON) + your files
+GET    /privacy/settings               V0.13: external AI processing choice
+PUT    /privacy/settings
+GET    /privacy/consents               V0.13: recorded decisions (versioned)
+POST   /privacy/delete-account         V0.13: password + "DELETE MY ACCOUNT"
 
 GET    /profile                        personal + professional + industries
 PUT    /profile

@@ -1,275 +1,123 @@
-# JobPilot Manual Testing Quick Start
+# JobPilot Manual Testing — Quick Start
 
-This file provides the fastest path to start testing JobPilot locally.
+Everything runs in Docker. You need **only Docker** (Docker Desktop on macOS/Windows, or
+Docker Engine with the Compose plugin on Linux). You do **not** need PostgreSQL, `psql`,
+Python, a virtual environment, Node.js, `npm install` or `pip install`.
 
-## One-Time Setup (First Time Only)
-
-### 1. Environment Setup
-
-```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit .env if needed (optional - defaults should work)
-# For real AI features, add your ANTHROPIC_API_KEY
-```
-
-### 2. Backend Setup
+## 1. Start JobPilot with test data
 
 ```bash
-cd backend
-
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run database migrations
-alembic upgrade head
-
-# Seed with test data (creates test user and jobs)
-python -m scripts.seed_manual_test_data
+git clone https://github.com/EhsanKai/JobPilot.git
+cd JobPilot
+cp .env.example .env                                  # optional: the defaults work
+docker compose --profile manual-test up --build
 ```
 
-### 3. Frontend Setup
+What happens, in order (each step waits for the previous one's health check, not for a
+fixed sleep):
 
-```bash
-cd frontend
-npm install
-```
+1. **postgres** starts and becomes healthy (`pg_isready`).
+2. **backend** waits for the database, runs **all Alembic migrations** (a fresh database is
+   created from scratch; an existing one is upgraded), then starts the API. It reports
+   healthy only when the database is reachable *and* its schema is at the current revision
+   (`/health/ready`). A failed migration stops the backend with a clear `event=migration_failed`
+   log line — nothing starts on a half-initialized database.
+3. **frontend** starts once the backend is healthy.
+4. **seed** (only with `--profile manual-test`) creates the synthetic test user, then exits.
 
-### 4. Start PostgreSQL (First Time)
+When you see `seed-1 | Seeded synthetic manual-test data:` open **http://localhost:3000**.
 
-```bash
-# From project root, in a separate terminal
-docker-compose up -d postgres
+The first build takes a few minutes (it downloads base images and dependencies); later
+starts take seconds.
 
-# Wait ~10 seconds for database to be ready
-docker-compose logs postgres | grep "ready to accept"
-```
+Prefer a short command? `./start-dev.sh test-data` does the same in the background
+(`./start-dev.sh help` lists all commands).
 
-## Quick Start (Every Time You Want to Test)
+## 2. Log in
 
-### Terminal 1: Start PostgreSQL
-```bash
-docker-compose up postgres
-```
+| | |
+|---|---|
+| E-mail | `test.user@example.com` |
+| Password | `TestPassword123!` |
 
-### Terminal 2: Start Backend
-```bash
-cd backend
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
+`example.com` is reserved for documentation (RFC 2606) and passes JobPilot's real e-mail
+validation. Do not use `.local` addresses: `.local` is a special-use name that the e-mail
+validation (correctly) rejects.
 
-### Terminal 3: Start Frontend
-```bash
-cd frontend
-npm run dev
-```
+## 3. What the test data contains
 
-### Open Browser
-```
-http://localhost:3000
-```
+Synthetic only — the person, the company "Musterfirma Demo GmbH" and its postings do not
+exist. Everything is created through JobPilot's real code paths (registration, profile
+services, the resume upload validation, the Greenhouse/Lever discovery pipeline with
+synthetic board payloads, deterministic matching, the tracking state machine):
 
-## Login Credentials
+- **Profile**: Max Mustermann, Senior Software Engineer, Munich; 8 skills; German (native),
+  English (fluent), Spanish (basic).
+- **Preferences**: Senior Backend Engineer / Full-Stack Engineer, Munich or Berlin, hybrid or
+  remote, EUR 75–90k, deal breaker: working-student roles.
+- **Resume**: one DOCX, uploaded but not analyzed (analysis needs `ANTHROPIC_API_KEY`).
+- **Jobs** (7 jobs from 8 postings): an excellent match published on both Greenhouse and
+  Lever (shown as one job with two sources), a good remote match, a partial match, a weak
+  match, a junior role (saved), a management role, and a working-student role that hits
+  the deal breaker.
+- **Applications**: PREPARING, APPLIED (follow-up in 7 days), INTERVIEW, REJECTED, WITHDRAWN —
+  each with its tracking timeline.
 
-After seeding, use:
-- **Email**: `test.user@example.local`
-- **Password**: `TestPassword123!`
+The postings' application links do not lead to real forms.
 
-## Test Data Included
+## 4. Reset
 
-After seeding, your local environment has:
+| Goal | Command |
+|---|---|
+| Re-create only the test user | `./start-dev.sh seed --reset` (= `docker compose run --rm seed --reset`) |
+| Wipe **everything** (database + uploads) and start fresh with test data | `./start-dev.sh reset` |
+| The same by hand | `docker compose down -v` then `docker compose --profile manual-test up --build` |
+| Stop without losing data | `docker compose down` (or Ctrl+C in the `up` terminal) |
 
-✓ **1 Test User** with complete profile:
-- 8 skills (Python, TypeScript, React, PostgreSQL, AWS, Docker, FastAPI, GraphQL)
-- 3 languages (German native, English C1, Spanish basic)
-- 7 years experience at Senior level
-- Located in Munich, prefers hybrid/remote work
+## 5. Test checklist (≈35 min)
 
-✓ **1 Realistic Resume** with:
-- 3 employers and 7 years experience
-- Technical skills and education
-- Multiple job titles and dates
+1. **Auth & dashboard (5 min)** — log in; the dashboard shows profile completeness, resume
+   status and the applications summary (1 applied, 1 interview, 1 rejected …). Log out and
+   back in.
+2. **Profile & resume (5 min)** — edit the profile; the seeded resume is listed. With an
+   `ANTHROPIC_API_KEY` in `.env` (then `docker compose up -d backend`), analyze it and
+   review the extracted facts.
+3. **Jobs & matching (5 min)** — 7 jobs; the cross-source job shows both sources; the match
+   panel explains strengths and gaps; the working-student job shows the deal breaker.
+4. **Applications & documents (10 min)** — open the PREPARING application; with an AI key,
+   generate a tailored CV and cover letter; add an application question and answer it.
+5. **Tracking (5 min)** — move an application through statuses; add a note; check the
+   timeline and that the dashboard counts follow.
+6. **Privacy & security (5 min, V0.13)** — *Settings*: "My data" lists what is stored;
+   *Download my data* gives a ZIP (JSON + your files); switch *external AI processing* off
+   and see AI features refuse without calling the provider; *Cookie preferences* states
+   that JobPilot uses no optional cookies; *Log out everywhere*; finally *Delete my account*
+   on a throw-away account (needs the password and the phrase `DELETE MY ACCOUNT`).
+7. **Wrong-password lockout** — 5 wrong passwords for one account → "Too many unsuccessful
+   sign-in attempts"; it clears after 15 minutes.
 
-✓ **8 Test Jobs** covering different scenarios:
-- Job A: Excellent match (Senior Backend Engineer)
-- Job B: Good match (Full-Stack Engineer)
-- Job C: Weak match (Java Developer)
-- Job D: Missing info (no salary/work model)
-- Job E: Deal breaker (fully on-site)
-- Job F: Cross-source duplicate (DevOps Engineer on Greenhouse + Lever)
-- Job G: German posting (Senior Softwareentwickler)
-- Job H: Inactive/expired job
+Detailed scenarios: [docs/manual-product-test.md](docs/manual-product-test.md). Record
+findings in [docs/product-validation.md](docs/product-validation.md).
 
-✓ **5 Sample Applications** in different states:
-- DRAFT (Job C)
-- PREPARING (Job B)
-- IN_PROGRESS (Job D)
-- INTERVIEWING (Job G, German)
-- REJECTED (Job H)
-- Plus space to create your own for Job A
+## 6. Troubleshooting
 
-## Complete Test Checklist
+| Symptom | Fix |
+|---|---|
+| `port is already allocated` | Another program uses 3000, 8000 or 5432. Set `FRONTEND_PORT`, `BACKEND_PORT` or `POSTGRES_PORT` in `.env` (e.g. `POSTGRES_PORT=55432`). If you change `BACKEND_PORT`, also set `NEXT_PUBLIC_API_URL=http://localhost:<port>/api/v1` and rebuild (`docker compose up --build`). |
+| backend keeps restarting | `./start-dev.sh logs backend` — look for `event=migration_failed reason=...`. |
+| `relation "users" does not exist` | Should not happen any more: the backend migrates before it starts. If you run the backend outside Docker, run `python -m app.db.migrate` first. |
+| Login says "Invalid email or password" | Was the seed run? `./start-dev.sh seed`. Use `test.user@example.com`. |
+| "Too many unsuccessful sign-in attempts" | Wait 15 minutes, or restart the backend (`docker compose restart backend`) — the counter lives in the API process. |
+| AI features say "not configured" | Add `ANTHROPIC_API_KEY` to `.env`, then `docker compose up -d backend`. |
+| Everything is weird | `./start-dev.sh reset` |
 
-Go through these steps to verify everything works:
+Is it healthy? `./start-dev.sh status` — all services `healthy`, seed `exited (0)`.
+Automated check of the whole path: `./start-dev.sh smoke` (wipes local data, builds,
+starts, seeds, logs in as the test user, checks the dashboard data, schema and frontend).
 
-### Phase 1: Authentication & Profile (5 min)
-- [ ] Login works
-- [ ] Dashboard displays profile completeness
-- [ ] Can view profile
-- [ ] Can edit profile and changes persist
+## 7. Not for production
 
-### Phase 2: Resume & Jobs (10 min)
-- [ ] Resume displays (no upload needed, pre-seeded)
-- [ ] Job list shows 8 jobs
-- [ ] Can view job details
-- [ ] Can save/unsave jobs
-
-### Phase 3: Matching (5 min)
-- [ ] Can see match scores on Job A
-- [ ] Match details show strengths/gaps/deal-breakers
-- [ ] Job E shows deal-breaker (on-site)
-- [ ] Job D shows "unknown" handling
-
-### Phase 4: Application & Documents (10 min)
-- [ ] Create application for Job A
-- [ ] Generate CV (should complete quickly)
-- [ ] Generate Cover Letter
-- [ ] Verify CV and letter content are accurate
-- [ ] No invented information
-
-### Phase 5: Submission & Tracking (5 min)
-- [ ] Review application (final step)
-- [ ] Submit application
-- [ ] Status changes to "SUBMITTED"
-- [ ] View in Application Tracking
-- [ ] Change status to "INTERVIEWING"
-- [ ] Dashboard KPIs update
-
-**Total Time**: ~35 minutes for complete manual test
-
-## Resetting Test Data
-
-If you want to start fresh:
-
-```bash
-cd backend
-source venv/bin/activate
-python -m scripts.seed_manual_test_data --reset
-
-# Follow prompts (type 'yes' to confirm)
-```
-
-This will:
-- Drop and recreate the database
-- Run migrations
-- Seed fresh test data
-- Reset test credentials
-
-## Troubleshooting
-
-### PostgreSQL won't start
-```bash
-# Check if container is running
-docker-compose ps
-
-# View logs
-docker-compose logs postgres
-
-# Force restart
-docker-compose down
-docker-compose up postgres
-```
-
-### Backend migration fails
-```bash
-# Verify database connection
-psql -U jobpilot -h localhost -d jobpilot -c "SELECT 1"
-
-# Re-run migrations
-alembic upgrade head
-
-# If that fails, reset and reseed
-python -m scripts.seed_manual_test_data --reset
-```
-
-### Frontend won't start
-```bash
-# Clear Next.js cache
-rm -rf .next
-
-# Reinstall dependencies
-npm install
-
-# Start again
-npm run dev
-```
-
-### Port already in use
-```bash
-# Kill process on port 3000 (frontend)
-lsof -ti:3000 | xargs kill -9
-
-# Kill process on port 8000 (backend)
-lsof -ti:8000 | xargs kill -9
-
-# Kill postgres container
-docker-compose down
-
-# Start fresh
-```
-
-## What to Test
-
-1. **Happy Path**: Login → Profile → Resume → Jobs → Match → Create App → Generate Docs → Submit → Track
-2. **Job Matching**: Verify Job A matches well, Job E shows deal-breaker, Job D handles unknown data
-3. **Documents**: CV/CL generation should complete quickly with realistic content
-4. **Data Persistence**: Changes should survive navigation and page reloads
-5. **Cross-source Handling**: Job F (DevOps) should show as coming from Greenhouse + Lever
-6. **Application Lifecycle**: Track application through multiple statuses
-
-## Important Notes
-
-- ✓ **Real Database**: Everything uses the real database, not mocks
-- ✓ **Real API**: All backend code is production code
-- ✓ **Real Frontend**: All frontend code is production code  
-- ✓ **Seeded Data Only**: Test data is created via seed script, not hardcoded
-- ✓ **No Backend Bypassing**: Browser automation would test real form filling (if enabled)
-- ✗ **Not a Demo**: Not a fake UI or hardcoded dashboard
-
-## Next: Manual Testing Guide
-
-After setup, follow `docs/manual-product-test.md` for detailed test steps.
-
-After testing, record findings in `docs/product-validation.md`.
-
-## Questions?
-
-- Check backend logs: Look in Terminal 2 for API errors
-- Check frontend logs: Open browser DevTools (F12) → Console
-- Check database: `psql -U jobpilot -d jobpilot`
-- Read the detailed guides: `docs/manual-product-test.md`
-
-## Production Checklist
-
-Before shipping (not needed for V0.12 manual testing):
-
-- [ ] No hardcoded test data in production
-- [ ] No fake job boards in production
-- [ ] Real AI provider configured
-- [ ] Real job sources enabled
-- [ ] Real database backend
-- [ ] HTTPS enforced
-- [ ] Monitoring configured
-- [ ] Error handling tested
-- [ ] Performance validated
-- [ ] Security audit passed
-
----
-
-**Ready to test?** Start with: `docker-compose up postgres` in one terminal, then follow "Quick Start" above.
+The manual-test profile, its synthetic account and the development defaults in
+`docker-compose.yml` (database password, `SECRET_KEY`) are for local testing only. The
+backend refuses those defaults when `APP_ENV=production`, and the seed refuses to run there.
+See [docs/docker-development.md](docs/docker-development.md) and [docs/security.md](docs/security.md).
