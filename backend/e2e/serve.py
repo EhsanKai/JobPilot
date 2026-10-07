@@ -158,6 +158,9 @@ def main() -> None:
     settings.AUTOMATION_BROWSER_HEADLESS = True
     settings.AUTOMATION_ALLOW_PRIVATE_HOSTS = True
     settings.SUBMISSION_RESULT_TIMEOUT_SECONDS = 3.0
+    # Many users share this one server in a full E2E run, and a stopped or submitted session
+    # keeps its browser open for the user (by design): allow more than the default 3.
+    settings.AUTOMATION_MAX_BROWSERS = 10
     chromium = os.environ.get("E2E_CHROMIUM_PATH")
     if chromium:
         settings.AUTOMATION_CHROMIUM_PATH = chromium
