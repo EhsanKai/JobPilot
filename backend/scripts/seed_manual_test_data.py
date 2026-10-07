@@ -1,881 +1,530 @@
-#!/usr/bin/env python3
-"""
-Seed the local development database with realistic manual test data.
+"""Seed synthetic manual-test data: one test user with a profile, a resume, jobs, matches
+and applications in several tracking states.
 
-This script creates:
-1. A synthetic test user with realistic profile, preferences, and resume
-2. Multiple test jobs in different scenarios
-3. Some seeded applications for tracking/dashboard testing
-4. Everything in a clearly isolated, repeatable way
+    docker compose run --rm seed              # inside Docker (recommended)
+    docker compose run --rm seed --reset      # delete the test user and seed again
+    python -m scripts.seed_manual_test_data   # from backend/, against DATABASE_URL
 
-Usage:
-    python -m scripts.seed_manual_test_data [--reset]
+Everything goes through JobPilot's real code paths -- no hand-written rows:
 
-The --reset flag drops existing data and recreates from scratch.
+- the account is registered by the auth service (real e-mail validation, real bcrypt);
+- profile, skills, languages and job preferences by their services and schemas;
+- the resume is a generated DOCX uploaded through the real upload validation;
+- jobs come through the real discovery pipeline (Greenhouse and Lever adapters,
+  normalizer, cross-source deduplication, persistence). Only the network hop is replaced:
+  the adapters read synthetic board payloads defined below instead of the live APIs;
+- matches are calculated by the deterministic matching engine;
+- applications are started by the application service and moved through the V0.12
+  tracking state machine with the same calls the API makes.
+
+The data is synthetic: the person, the companies ("Musterfirma Demo GmbH") and their job
+postings do not exist, and the postings' application pages are not real.
+
+Safety: refuses to run when APP_ENV=production, and refuses a database whose schema is not
+at the Alembic head (the backend container migrates on start). Idempotent: when the test
+user already exists it changes nothing unless --reset is given; --reset deletes only the
+test user (through the real account deletion) and seeds it again.
 """
 
 import argparse
-import hashlib
-import os
+import html
+import io
 import sys
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
+from typing import Any
 
-# Ensure we can import from app
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
+import httpx
+from docx import Document
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.application import Application, ApplicationStatus, WorkAuthorization
-from app.models.candidate_profile_version import CandidateProfileVersion
-from app.models.deal_breaker import DealBreaker, DealBreakerType
-from app.models.employment_type import EmploymentType
-from app.models.job import Job
-from app.models.job_preferences import JobPreferences
-from app.models.job_source_posting import JobSourcePosting
-from app.models.language import Language, UserLanguage, LanguageProficiency
-from app.models.professional_profile import ProfessionalProfile
-from app.models.resume import Resume
-from app.models.resume_profile import ResumeProfile, EmployerHistory, EducationHistory
-from app.models.skill import Skill, UserSkill, SkillProficiency
+from app.db.migrate import schema_is_current
+from app.db.session import SessionLocal, engine
+from app.models.application import ApplicationStatus, NoticePeriodUnit
+from app.models.deal_breaker import DealBreakerType
+from app.models.discovery_run import DiscoveryRunStatus
+from app.models.job_preferences import (
+    EmploymentTypeValue,
+    JobTitlePriority,
+    RelocationPreference,
+    RemotePreference,
+    TravelWillingness,
+)
+from app.models.language import LanguageProficiency
+from app.models.professional_profile import SeniorityLevel
+from app.models.skill import SkillProficiency
 from app.models.user import User
-from app.models.user_job import UserJob
-from app.models.user_profile import UserProfile
-from app.models.work_model import WorkModel
+from app.schemas.application import ApplicationCreate, NoticePeriod
+from app.schemas.application_tracking import StatusChangeRequest, TrackingUpdateRequest
+from app.schemas.auth import RegisterRequest
+from app.schemas.jobs import JobSearchCriteria
+from app.schemas.languages import UserLanguageCreate
+from app.schemas.matching import BatchMatchRequest
+from app.schemas.preferences import (
+    DealBreakerInput,
+    DesiredJobTitleInput,
+    JobPreferencesUpdate,
+    PreferredLocationInput,
+)
+from app.schemas.profile import UserProfileUpdate
+from app.schemas.skills import SkillCreate
+from app.services import (
+    auth_service,
+    languages_service,
+    preferences_service,
+    profile_service,
+    resume_service,
+    skills_service,
+)
+from app.services.applications import service as application_service
+from app.services.applications import tracking
+from app.services.job_discovery import job_service, run_service
+from app.services.job_discovery.registry import JobSourceRegistry
+from app.services.job_discovery.sources.ats import parse_board_config
+from app.services.job_discovery.sources.greenhouse import API_HOST as GREENHOUSE_HOST
+from app.services.job_discovery.sources.greenhouse import GreenhouseJobSource
+from app.services.job_discovery.sources.http import JsonFetcher
+from app.services.job_discovery.sources.lever import API_HOSTS as LEVER_HOSTS
+from app.services.job_discovery.sources.lever import LeverJobSource
+from app.services.matching import service as matching_service
+from app.services.privacy import deletion
+from app.services.storage.factory import get_file_storage
+
+# The synthetic manual-test account. example.com is reserved for documentation (RFC 2606)
+# and passes JobPilot's real e-mail validation; ".local" is a special-use name the
+# validation rightly rejects.
+TEST_EMAIL = "test.user@example.com"
+TEST_PASSWORD = "TestPassword123!"
+TEST_FIRST_NAME = "Max"
+TEST_LAST_NAME = "Mustermann"
+
+DEMO_COMPANY = "Musterfirma Demo GmbH"
+DEMO_BOARD = "jobpilot-demo"
+LEVER_HOST = LEVER_HOSTS["global"]
+GREENHOUSE_BOARDS = "https://job-boards.greenhouse.io"
 
 
-def create_test_user(session: Session) -> User:
-    """Create a synthetic test user."""
-    user = User(
-        email="test.user@example.local",
-        first_name="Max",
-        last_name="Mustermann",
-        hashed_password="$2b$12$KIX.Fl.F8qO4mSkLH9XZWOwU0k.o0bIIIVhUgj7oB/Cw59RM.7B2i",  # hash of "TestPassword123!"
+# --- Synthetic job postings -------------------------------------------------------------------
+
+
+def _sections(intro: str, duties: list[str], needs: list[str]) -> str:
+    items = lambda values: "".join(f"<li>{v}</li>" for v in values)  # noqa: E731
+    return (
+        f"<p>{intro}</p><h3>Your tasks</h3><ul>{items(duties)}</ul>"
+        f"<h3>Your profile</h3><ul>{items(needs)}</ul>"
     )
-    session.add(user)
-    session.flush()
+
+
+#: (key, title, location, employment, intro, duties, requirements, scenario)
+JOBS: list[dict[str, Any]] = [
+    {
+        "title": "Senior Python Backend Engineer",
+        "location": "Munich, Germany",
+        "lever_location": "München",
+        "intro": "Build the APIs behind our logistics platform (synthetic demo posting).",
+        "duties": ["Design and run FastAPI services", "Own PostgreSQL schemas and migrations"],
+        "needs": [
+            "5+ years of professional Python experience",
+            "Experience with FastAPI or Django",
+            "Strong PostgreSQL skills",
+            "Docker and CI/CD",
+            "Fluent German or English",
+        ],
+        "scenario": "excellent match, published on BOTH Greenhouse and Lever (one job)",
+        "both_sources": True,
+    },
+    {
+        "title": "Senior Full-Stack Engineer (TypeScript / Python)",
+        "location": "Remote, Germany",
+        "intro": "Work across our React frontend and Python backend (synthetic demo posting).",
+        "duties": ["Ship features end to end", "Mentor other engineers"],
+        "needs": ["TypeScript and React", "Python", "REST API design", "5+ years of experience"],
+        "scenario": "good match, remote",
+    },
+    {
+        "title": "Staff Platform Engineer",
+        "location": "Berlin, Germany",
+        "intro": "Run our Kubernetes platform (synthetic demo posting).",
+        "duties": ["Operate Kubernetes clusters", "Build internal tooling in Go"],
+        "needs": [
+            "8+ years of experience",
+            "Kubernetes in production",
+            "Go",
+            "Terraform",
+            "Docker",
+        ],
+        "scenario": "partial match: missing Kubernetes / Go",
+    },
+    {
+        "title": "Data Engineer (Spark / Scala)",
+        "location": "Frankfurt am Main, Germany",
+        "intro": "Build batch and streaming pipelines (synthetic demo posting).",
+        "duties": ["Develop Spark jobs", "Model data in the lakehouse"],
+        "needs": ["Scala", "Apache Spark", "Kafka", "SQL"],
+        "scenario": "weak match: different stack",
+    },
+    {
+        "title": "Junior Frontend Developer (Vue.js)",
+        "location": "Hamburg, Germany",
+        "intro": "Join our frontend team as a junior developer (synthetic demo posting).",
+        "duties": ["Build Vue.js components", "Write unit tests"],
+        "needs": ["First experience with Vue.js", "HTML and CSS", "German C1"],
+        "scenario": "seniority mismatch (junior role)",
+    },
+    {
+        "title": "Engineering Manager Backend",
+        "location": "Munich, Germany",
+        "intro": "Lead a team of six backend engineers (synthetic demo posting).",
+        "duties": ["Lead and grow the team", "Own delivery and hiring"],
+        "needs": ["3+ years of people leadership", "Backend engineering background"],
+        "scenario": "management role",
+    },
+    {
+        "title": "Working Student Software Development",
+        "location": "Cologne, Germany",
+        "lever_only": True,
+        "lever_location": "Köln",
+        "commitment": "Working Student",
+        "intro": "Support our engineering team 20h/week (synthetic demo posting).",
+        "duties": ["Help build internal tools"],
+        "needs": ["Enrolled student", "Python basics"],
+        "scenario": "employment-type deal breaker (working student)",
+    },
+]
+
+
+def _greenhouse_payload() -> dict[str, Any]:
+    jobs = []
+    for index, job in enumerate(JOBS):
+        if job.get("lever_only"):
+            continue
+        jobs.append(
+            {
+                "id": 9_100_000 + index,
+                "title": job["title"],
+                "updated_at": "2026-10-01T10:00:00Z",
+                "first_published": "2026-09-28T08:00:00Z",
+                "location": {"name": job["location"]},
+                "absolute_url": f"{GREENHOUSE_BOARDS}/{DEMO_BOARD}/jobs/{9_100_000 + index}",
+                "metadata": [{"name": "Employment Type", "value": "Full-time"}],
+                "content": html.escape(_sections(job["intro"], job["duties"], job["needs"])),
+            }
+        )
+    return {"jobs": jobs}
+
+
+def _lever_payload() -> list[dict[str, Any]]:
+    postings = []
+    for index, job in enumerate(JOBS):
+        if not (job.get("both_sources") or job.get("lever_only")):
+            continue
+        posting_id = f"5eed0000-0000-4000-8000-{index:012d}"
+        items = lambda values: "".join(f"<li>{v}</li>" for v in values)  # noqa: E731
+        location = job.get("lever_location", job["location"])
+        postings.append(
+            {
+                "id": posting_id,
+                "text": job["title"],
+                "categories": {
+                    "location": location,
+                    "commitment": job.get("commitment", "Full Time"),
+                    "allLocations": [location],
+                },
+                "country": "DE",
+                "description": f"<div>{job['intro']}</div>",
+                "lists": [
+                    {"text": "Your tasks", "content": items(job["duties"])},
+                    {"text": "Your profile", "content": items(job["needs"])},
+                ],
+                "hostedUrl": f"https://jobs.lever.co/{DEMO_BOARD}/{posting_id}",
+                "applyUrl": f"https://jobs.lever.co/{DEMO_BOARD}/{posting_id}/apply",
+                "workplaceType": "unspecified",
+                "createdAt": 1759219200000,
+            }
+        )
+    return postings
+
+
+def demo_registry() -> JobSourceRegistry:
+    """The real Greenhouse and Lever adapters, reading the synthetic payloads above."""
+    greenhouse_jobs, lever_postings = _greenhouse_payload(), _lever_payload()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        if host == GREENHOUSE_HOST and path == f"/v1/boards/{DEMO_BOARD}":
+            return httpx.Response(200, json={"name": DEMO_COMPANY})
+        if host == GREENHOUSE_HOST and path == f"/v1/boards/{DEMO_BOARD}/jobs":
+            return httpx.Response(200, json=greenhouse_jobs)
+        if host == LEVER_HOST and path == f"/v0/postings/{DEMO_BOARD}":
+            skip = int(request.url.params.get("skip", "0"))
+            limit = int(request.url.params.get("limit", "100"))
+            return httpx.Response(200, json=lever_postings[skip : skip + limit])
+        return httpx.Response(404, json={"error": "not found"})
+
+    def fetcher(host: str) -> JsonFetcher:
+        return JsonFetcher(
+            allowed_hosts=frozenset({host}),
+            timeout_seconds=10.0,
+            max_response_bytes=5_000_000,
+            transport=httpx.MockTransport(handler),
+            max_retries=0,
+        )
+
+    boards = parse_board_config(f"{DEMO_BOARD}:{DEMO_COMPANY}")
+    registry = JobSourceRegistry()
+    registry.register(GreenhouseJobSource(boards, fetcher(GREENHOUSE_HOST), max_jobs_per_board=100))
+    registry.register(LeverJobSource(boards, fetcher(LEVER_HOST), max_jobs_per_board=100))
+    return registry
+
+
+# --- Synthetic resume --------------------------------------------------------------------------
+
+
+def resume_docx() -> bytes:
+    document = Document()
+    document.add_heading(f"{TEST_FIRST_NAME} {TEST_LAST_NAME}", level=0)
+    document.add_paragraph(f"{TEST_EMAIL} | Munich, Germany")
+    document.add_paragraph("Synthetic resume for JobPilot manual testing. Not a real person.")
+    document.add_heading("Professional Experience", level=1)
+    document.add_paragraph(
+        "Senior Software Engineer, Beispiel Logistik GmbH, Munich (2021 - today)"
+    )
+    for line in (
+        "Designed and operated Python / FastAPI services on PostgreSQL",
+        "Introduced Docker-based CI/CD pipelines",
+        "Mentored three junior engineers",
+    ):
+        document.add_paragraph(line, style="List Bullet")
+    document.add_paragraph("Software Engineer, Muster Media AG, Berlin (2018 - 2021)")
+    for line in (
+        "Built React and TypeScript frontends",
+        "Developed REST APIs in Python",
+    ):
+        document.add_paragraph(line, style="List Bullet")
+    document.add_heading("Education", level=1)
+    document.add_paragraph("M.Sc. Computer Science, Technical University of Munich (2018)")
+    document.add_heading("Skills", level=1)
+    document.add_paragraph("Python, FastAPI, PostgreSQL, TypeScript, React, Docker, AWS, GraphQL")
+    document.add_heading("Languages", level=1)
+    document.add_paragraph("German (native), English (fluent), Spanish (basic)")
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+# --- Seeding -------------------------------------------------------------------------------------
+
+
+def _find_test_user(db: Session) -> User | None:
+    return db.scalar(select(User).where(User.email == TEST_EMAIL))
+
+
+def _job_by_title(db: Session, user: User, title: str) -> uuid.UUID:
+    listing = job_service.list_jobs(db, user, page=1, page_size=100, q=title)
+    for job in listing.items:
+        if job.title == title:
+            return job.id
+    raise RuntimeError(f"seeded job not found: {title}")
+
+
+def seed(db: Session) -> User:
+    user = auth_service.register_user(
+        db,
+        RegisterRequest(
+            email=TEST_EMAIL,
+            password=TEST_PASSWORD,
+            first_name=TEST_FIRST_NAME,
+            last_name=TEST_LAST_NAME,
+        ),
+    )
+    profile_service.update_profile(
+        db,
+        user,
+        UserProfileUpdate(
+            phone="+49 89 1234567",
+            location="Munich, Germany",
+            current_job_title="Senior Software Engineer",
+            years_of_experience=7,
+            seniority_level=SeniorityLevel.SENIOR,
+            industries=["Software", "Logistics"],
+        ),
+    )
+    for name, proficiency, years in (
+        ("Python", SkillProficiency.EXPERT, 7),
+        ("FastAPI", SkillProficiency.ADVANCED, 4),
+        ("PostgreSQL", SkillProficiency.ADVANCED, 6),
+        ("TypeScript", SkillProficiency.ADVANCED, 5),
+        ("React", SkillProficiency.ADVANCED, 5),
+        ("Docker", SkillProficiency.INTERMEDIATE, 4),
+        ("AWS", SkillProficiency.INTERMEDIATE, 3),
+        ("GraphQL", SkillProficiency.INTERMEDIATE, 2),
+    ):
+        skills_service.add_skill(
+            db, user, SkillCreate(name=name, proficiency=proficiency, years_of_experience=years)
+        )
+    for name, level in (
+        ("German", LanguageProficiency.NATIVE),
+        ("English", LanguageProficiency.FLUENT),
+        ("Spanish", LanguageProficiency.BASIC),
+    ):
+        languages_service.add_language(db, user, UserLanguageCreate(name=name, proficiency=level))
+    preferences_service.update_preferences(
+        db,
+        user,
+        JobPreferencesUpdate(
+            desired_job_titles=[
+                DesiredJobTitleInput(
+                    title="Senior Backend Engineer", priority=JobTitlePriority.PRIMARY
+                ),
+                DesiredJobTitleInput(title="Full-Stack Engineer"),
+            ],
+            preferred_locations=[
+                PreferredLocationInput(location="Munich"),
+                PreferredLocationInput(location="Berlin"),
+            ],
+            employment_types=[EmploymentTypeValue.FULL_TIME],
+            preferred_industries=["Software"],
+            work_models=[RemotePreference.HYBRID, RemotePreference.REMOTE],
+            minimum_salary=Decimal("75000"),
+            desired_salary=Decimal("90000"),
+            salary_currency="EUR",
+            relocation=RelocationPreference.NO,
+            travel_willingness=TravelWillingness.OCCASIONAL,
+            deal_breakers=[
+                DealBreakerInput(
+                    type=DealBreakerType.EMPLOYMENT_TYPE,
+                    value=EmploymentTypeValue.WORKING_STUDENT.value,
+                )
+            ],
+        ),
+    )
+    content = resume_docx()
+    resume_service.upload_resume(
+        db,
+        user,
+        get_file_storage(),
+        file_name="Max_Mustermann_CV.docx",
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        file_size=len(content),
+        content=io.BytesIO(content),
+    )
+
+    # Jobs through the real discovery pipeline.
+    registry = demo_registry()
+    run = run_service.start_run(db, user, registry, JobSearchCriteria())
+    run_service.execute_run(run.id, session_factory=SessionLocal, registry=registry)
+    db.refresh(run)
+    if run.status is not DiscoveryRunStatus.COMPLETED:
+        raise RuntimeError(f"seed discovery run ended {run.status.value}: {run.error_code}")
+
+    matching_service.calculate_batch(db, user, BatchMatchRequest(limit=25, force=True))
+
+    _seed_applications(db, user)
     return user
 
 
-def create_personal_profile(session: Session, user: User) -> UserProfile:
-    """Create a realistic personal profile."""
-    profile = UserProfile(
-        user_id=user.id,
-        phone="+49 (123) 456-7890",
-        location_text="München, Deutschland",
+def _start(db: Session, user: User, title: str, **preparation: Any) -> Any:
+    job_id = _job_by_title(db, user, title)
+    result = application_service.start_application(
+        db, user, job_id, ApplicationCreate(**preparation)
     )
-    session.add(profile)
-    session.flush()
-    return profile
+    return result.application
 
 
-def create_professional_profile(session: Session, user: User) -> ProfessionalProfile:
-    """Create a realistic professional profile."""
-    profile = ProfessionalProfile(
-        user_id=user.id,
-        current_job_title="Senior Software Engineer",
-        years_of_experience=7,
-        seniority_level="Senior",
-    )
-    session.add(profile)
-    session.flush()
-    return profile
+def _move(db: Session, user: User, application: Any, status: ApplicationStatus, note: str) -> None:
+    tracking.change_status(db, user, application.id, StatusChangeRequest(status=status, note=note))
 
 
-def create_job_preferences(session: Session, user: User) -> JobPreferences:
-    """Create realistic job preferences."""
-    prefs = JobPreferences(
-        user_id=user.id,
-        desired_locations=["München", "Berlin", "Remote"],
-        salary_min=Decimal("85000"),
-        salary_max=Decimal("130000"),
-        employment_types=[EmploymentType.PERMANENT],
-        work_models=[WorkModel.HYBRID, WorkModel.REMOTE],
-        willing_to_relocate=False,
-        willing_to_travel=True,
-    )
-    session.add(prefs)
-    session.flush()
-    return prefs
-
-
-def add_skills(session: Session, user: User) -> None:
-    """Add skills to the user."""
-    skills_data = [
-        ("Python", SkillProficiency.ADVANCED),
-        ("TypeScript", SkillProficiency.ADVANCED),
-        ("React", SkillProficiency.ADVANCED),
-        ("PostgreSQL", SkillProficiency.ADVANCED),
-        ("AWS", SkillProficiency.INTERMEDIATE),
-        ("Docker", SkillProficiency.INTERMEDIATE),
-        ("FastAPI", SkillProficiency.ADVANCED),
-        ("GraphQL", SkillProficiency.INTERMEDIATE),
-    ]
-
-    for skill_name, proficiency in skills_data:
-        # Check if skill exists in catalog, create if not
-        skill = session.query(Skill).filter(Skill.name == skill_name).first()
-        if not skill:
-            skill = Skill(name=skill_name)
-            session.add(skill)
-            session.flush()
-
-        # Add user skill association
-        user_skill = UserSkill(user_id=user.id, skill_id=skill.id, proficiency=proficiency)
-        session.add(user_skill)
-
-
-def add_languages(session: Session, user: User) -> None:
-    """Add languages to the user."""
-    languages_data = [
-        ("German", LanguageProficiency.NATIVE),  # Native
-        ("English", LanguageProficiency.FLUENT),  # Fluent
-        ("Spanish", LanguageProficiency.BASIC),  # Basic
-    ]
-
-    for lang_name, proficiency in languages_data:
-        # Check if language exists in catalog, create if not
-        lang = session.query(Language).filter(Language.name == lang_name).first()
-        if not lang:
-            lang = Language(name=lang_name)
-            session.add(lang)
-            session.flush()
-
-        # Add user language association
-        user_lang = UserLanguage(user_id=user.id, language_id=lang.id, proficiency=proficiency)
-        session.add(user_lang)
-
-
-def create_synthetic_resume(session: Session, user: User) -> Resume:
-    """Create a realistic resume."""
-    resume_text = """Max Mustermann
-München, Deutschland | +49 (123) 456-7890
-max.mustermann@example.local
-
-PROFESSIONAL SUMMARY
-Senior Software Engineer with 7+ years of experience building scalable backend systems and modern frontend applications.
-Proven track record in cloud architecture, team leadership, and delivering high-impact products.
-
-EMPLOYMENT HISTORY
-
-Senior Software Engineer | TechCorp GmbH | Munich, Germany
-January 2021 – Present (3+ years)
-- Led architecture and implementation of microservices platform serving 2M+ users
-- Designed and deployed PostgreSQL scaling strategy, reducing query latency by 40%
-- Mentored 4 junior engineers; led code review culture improving defect detection by 25%
-- Implemented automated deployment pipeline reducing release time from 4 hours to 15 minutes
-- Tech: Python, FastAPI, PostgreSQL, Docker, Kubernetes, AWS
-
-Software Engineer | FinServe Solutions | Berlin, Germany
-July 2018 – December 2020 (2.5 years)
-- Built REST APIs serving 500K daily active users
-- Developed TypeScript/React frontend for payment dashboard
-- Implemented real-time notifications system using WebSockets
-- Tech: Node.js, TypeScript, React, PostgreSQL, Redis
-
-Junior Software Engineer | StartupXYZ | Hamburg, Germany
-June 2017 – June 2018 (1 year)
-- Full-stack development on customer portal
-- Implemented authentication and authorization system
-- Tech: Python, Django, Vue.js, MongoDB
-
-EDUCATION
-
-Bachelor of Science in Computer Science
-University of Munich (LMU)
-Graduated: June 2017
-GPA: 3.8/4.0
-
-CERTIFICATIONS
-- AWS Certified Solutions Architect - Professional (2022)
-- Kubernetes Application Developer (CKAD) (2021)
-
-TECHNICAL SKILLS
-Backend: Python, FastAPI, Node.js, Java
-Frontend: TypeScript, React, Vue.js, HTML/CSS
-Databases: PostgreSQL, MongoDB, Redis
-Cloud: AWS (EC2, S3, Lambda, RDS), Google Cloud
-DevOps: Docker, Kubernetes, CI/CD (GitHub Actions, GitLab CI)
-
-LANGUAGES
-- German: Native
-- English: Fluent (C1)
-- Spanish: Basic (A2)
-"""
-
-    # Hash the resume text to use as file_hash
-    file_hash = hashlib.sha256(resume_text.encode()).hexdigest()
-
-    resume = Resume(
-        user_id=user.id,
-        file_name="max_mustermann_resume.pdf",
-        file_size=len(resume_text.encode()),
-        file_hash=file_hash,
-        file_format="pdf",
-        raw_text=resume_text,
-        is_confirmed=True,
-    )
-    session.add(resume)
-    session.flush()
-
-    # Create resume profile from the resume
-    resume_profile = ResumeProfile(
-        user_id=user.id,
-        resume_id=resume.id,
-        ai_raw_output={},  # Would normally be AI output
-    )
-    session.add(resume_profile)
-    session.flush()
-
-    # Add employer history to resume profile
-    employers = [
-        {
-            "company_name": "TechCorp GmbH",
-            "job_title": "Senior Software Engineer",
-            "start_date": "2021-01-15",
-            "end_date": None,
-            "location": "Munich, Germany",
-            "description": "Led architecture and implementation of microservices platform",
-            "extracted_technologies": ["Python", "FastAPI", "PostgreSQL", "Docker", "Kubernetes", "AWS"],
-        },
-        {
-            "company_name": "FinServe Solutions",
-            "job_title": "Software Engineer",
-            "start_date": "2018-07-01",
-            "end_date": "2020-12-31",
-            "location": "Berlin, Germany",
-            "description": "Built REST APIs and React frontends",
-            "extracted_technologies": ["Node.js", "TypeScript", "React", "PostgreSQL", "Redis"],
-        },
-    ]
-
-    for emp in employers:
-        emp_history = EmployerHistory(
-            resume_profile_id=resume_profile.id,
-            company_name=emp["company_name"],
-            job_title=emp["job_title"],
-            start_date=emp["start_date"],
-            end_date=emp["end_date"],
-            location=emp["location"],
-            description=emp["description"],
-            extracted_technologies=emp["extracted_technologies"],
-        )
-        session.add(emp_history)
-
-    # Add education
-    education = EducationHistory(
-        resume_profile_id=resume_profile.id,
-        degree="Bachelor of Science",
-        field="Computer Science",
-        institution="University of Munich (LMU)",
-        graduation_date="2017-06-30",
-    )
-    session.add(education)
-
-    return resume
-
-
-def create_test_jobs(session: Session) -> list[Job]:
-    """Create multiple test jobs representing different scenarios."""
+def _seed_applications(db: Session, user: User) -> None:
     now = datetime.now(UTC)
-    jobs = []
+    # Saved only (no application yet).
+    junior = _job_by_title(db, user, "Junior Frontend Developer (Vue.js)")
+    job_service.set_saved(db, user, junior, saved=True)
 
-    # Job A: Excellent Match (Strong Technical + Preference Match)
-    job_a = Job(
-        title="Senior Backend Engineer",
-        company_name="DataViz Systems",
-        description="""We're seeking a Senior Backend Engineer to join our growing team in Munich.
-
-Requirements:
-- 5+ years backend development experience
-- Expert in Python and FastAPI
-- PostgreSQL optimization experience
-- AWS or cloud platform experience
-- Team leadership experience
-
-Nice to have:
-- Kubernetes experience
-- Microservices architecture
-- Open source contributions
-
-We offer:
-- Hybrid work (3 days office, 2 days remote)
-- Salary: €95,000 - €130,000 annually
-- Relocation support available
-- 30 days vacation
-- Professional development budget
-- Health insurance""",
-        location="München, Deutschland",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[WorkModel.HYBRID],
-        salary_min=Decimal("95000"),
-        salary_max=Decimal("130000"),
-        salary_currency="EUR",
-        seniority_level="Senior",
-        technologies=["Python", "FastAPI", "PostgreSQL", "AWS", "Docker"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=5),
-        last_seen=now,
-        is_active=True,
+    # Preparing: the best match, with preparation data filled in.
+    _start(
+        db,
+        user,
+        "Senior Python Backend Engineer",
+        notice_period=NoticePeriod(value=3, unit=NoticePeriodUnit.MONTHS),
+        application_language="en",
     )
-    session.add(job_a)
-    jobs.append(job_a)
-
-    # Job B: Good Match (Good Technical, Some Preference Mismatch)
-    job_b = Job(
-        title="Full-Stack Engineer",
-        company_name="WebServices Europe",
-        description="""Join our Berlin-based engineering team as a Full-Stack Engineer.
-
-You'll work on:
-- Modern web applications with React and TypeScript
-- Backend services in Node.js
-- PostgreSQL database design
-- AWS infrastructure
-
-Requirements:
-- 3+ years professional experience
-- Strong JavaScript/TypeScript skills
-- React experience required
-- Backend API development experience
-
-We offer:
-- Fully remote position (Germany-based)
-- Salary: €75,000 - €105,000
-- 28 days vacation
-- Home office equipment budget
-- Flexible working hours""",
-        location="Berlin, Deutschland",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[WorkModel.REMOTE],
-        salary_min=Decimal("75000"),
-        salary_max=Decimal("105000"),
-        salary_currency="EUR",
-        seniority_level="Mid",
-        technologies=["TypeScript", "React", "Node.js", "PostgreSQL", "AWS"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=3),
-        last_seen=now,
-        is_active=True,
+    # Applied, with a follow-up reminder.
+    applied = _start(db, user, "Senior Full-Stack Engineer (TypeScript / Python)")
+    _move(db, user, applied, ApplicationStatus.APPLIED, "Applied on the company website.")
+    tracking.update_tracking(
+        db, user, applied.id, TrackingUpdateRequest(follow_up_at=now + timedelta(days=7))
     )
-    session.add(job_b)
-    jobs.append(job_b)
+    # Interview.
+    interview = _start(db, user, "Staff Platform Engineer")
+    _move(db, user, interview, ApplicationStatus.APPLIED, "Sent CV and cover letter.")
+    _move(db, user, interview, ApplicationStatus.INTERVIEW, "First interview invitation.")
+    # Rejected.
+    rejected = _start(db, user, "Data Engineer (Spark / Scala)")
+    _move(db, user, rejected, ApplicationStatus.APPLIED, "Applied.")
+    _move(db, user, rejected, ApplicationStatus.REJECTED, "Rejection e-mail received.")
+    # Withdrawn while preparing.
+    withdrawn = _start(db, user, "Engineering Manager Backend")
+    _move(db, user, withdrawn, ApplicationStatus.WITHDRAWN, "Decided not to apply.")
 
-    # Job C: Weak Match (Some overlapping skills, important gaps)
-    job_c = Job(
-        title="Java Developer",
-        company_name="EnterpriseCorps",
-        description="""We need experienced Java developers for our enterprise platform.
 
-Requirements:
-- 5+ years Java development
-- Spring Boot framework expertise
-- Hibernate and JPA
-- Oracle or SQL Server database experience
-- Enterprise architecture patterns
-
-We offer:
-- Full-time permanent role
-- Munich location (on-site 4 days/week)
-- Salary: €80,000 - €115,000
-- Standard benefits package""",
-        location="München, Deutschland",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[WorkModel.HYBRID],
-        salary_min=Decimal("80000"),
-        salary_max=Decimal("115000"),
-        salary_currency="EUR",
-        seniority_level="Senior",
-        technologies=["Java", "Spring Boot", "Hibernate", "Oracle"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=10),
-        last_seen=now,
-        is_active=True,
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Seed JobPilot's synthetic manual-test data.")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="delete the test user (and everything it owns) and seed it again",
     )
-    session.add(job_c)
-    jobs.append(job_c)
+    args = parser.parse_args(argv)
 
-    # Job D: Missing Information (Unknown salary/work model)
-    job_d = Job(
-        title="Senior Platform Engineer",
-        company_name="CloudScale GmbH",
-        description="""We're looking for a Platform Engineer to help scale our infrastructure.
-
-What we need:
-- Strong backend development skills
-- Experience with distributed systems
-- Kubernetes administration
-- Python or Go experience
-- 5+ years experience
-
-Competitive salary based on experience.
-Location and work arrangement TBD during interview.""",
-        location="Deutschland (flexible)",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=None,  # Unknown
-        salary_min=None,
-        salary_max=None,
-        seniority_level="Senior",
-        technologies=["Python", "Kubernetes", "Docker", "Go"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=2),
-        last_seen=now,
-        is_active=True,
-    )
-    session.add(job_d)
-    jobs.append(job_d)
-
-    # Job E: Deal Breaker (Fully on-site when user prefers hybrid/remote)
-    job_e = Job(
-        title="Mid-Level Software Engineer",
-        company_name="OnSiteOnly Corp",
-        description="""We have an exciting opportunity for a Software Engineer.
-
-Requirements:
-- 3-5 years experience
-- Python or JavaScript skills
-- Database experience
-
-Important: This is a fully on-site position in our Stuttgart office.
-No remote work or hybrid options.
-
-We offer:
-- On-site role in Stuttgart
-- Salary: €65,000 - €85,000
-- Company parking provided
-- On-site gym access""",
-        location="Stuttgart, Deutschland",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[],  # Empty list = on-site only
-        salary_min=Decimal("65000"),
-        salary_max=Decimal("85000"),
-        salary_currency="EUR",
-        seniority_level="Mid",
-        technologies=["Python", "JavaScript"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=15),
-        last_seen=now,
-        is_active=True,
-    )
-    session.add(job_e)
-    jobs.append(job_e)
-
-    # Job F: Cross-source duplicate (we'll create two source postings for this)
-    job_f = Job(
-        title="DevOps Engineer",
-        company_name="MultiCloud Systems",
-        description="""Join us as a DevOps Engineer.
-
-You'll be responsible for:
-- Managing Kubernetes clusters
-- Infrastructure as Code (Terraform)
-- CI/CD pipeline design
-- Monitoring and alerting systems
-
-Requirements:
-- 4+ years DevOps experience
-- Kubernetes hands-on experience
-- Cloud platforms (AWS/GCP/Azure)
-- Scripting skills (Python/Bash)
-
-Salary: €90,000 - €125,000 annually
-Work: Hybrid (Berlin, Munich, or remote)""",
-        location="Berlin / München (flexible)",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[WorkModel.HYBRID, WorkModel.REMOTE],
-        salary_min=Decimal("90000"),
-        salary_max=Decimal("125000"),
-        salary_currency="EUR",
-        seniority_level="Senior",
-        technologies=["Kubernetes", "Terraform", "AWS", "Python", "Bash"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=7),
-        last_seen=now,
-        is_active=True,
-    )
-    session.add(job_f)
-    jobs.append(job_f)
-
-    # Job G: Different language (German job posting)
-    job_g = Job(
-        title="Senior Softwareentwickler",
-        company_name="Mittelstand GmbH",
-        description="""Wir suchen einen erfahrenen Softwareentwickler.
-
-Anforderungen:
-- 6+ Jahre Berufserfahrung
-- Python und/oder C++ Kenntnisse
-- Datenbankerfahrung (PostgreSQL, MySQL)
-- Team-Fähigkeit und Kommunikation
-
-Wir bieten:
-- Hybride Arbeit (Köln)
-- Gehalt: €85.000 - €120.000
-- 30 Tage Urlaub
-- Weiterbildungsbudget
-- Flexible Arbeitszeiten""",
-        location="Köln, Deutschland",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[WorkModel.HYBRID],
-        salary_min=Decimal("85000"),
-        salary_max=Decimal("120000"),
-        salary_currency="EUR",
-        seniority_level="Senior",
-        technologies=["Python", "C++", "PostgreSQL"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=1),
-        last_seen=now,
-        is_active=True,
-    )
-    session.add(job_g)
-    jobs.append(job_g)
-
-    # Job H: Expired/Inactive job
-    job_h = Job(
-        title="QA Engineer (Expired)",
-        company_name="NoLongerHiring Corp",
-        description="""This position is no longer available.
-
-Note: This is an inactive job used for testing.
-        """,
-        location="Hamburg, Deutschland",
-        employment_type=EmploymentType.PERMANENT,
-        work_model=[WorkModel.HYBRID],
-        salary_min=Decimal("60000"),
-        salary_max=Decimal("80000"),
-        salary_currency="EUR",
-        seniority_level="Mid",
-        technologies=["Python", "Selenium"],
-        industries=["Technology"],
-        first_seen=now - timedelta(days=60),
-        last_seen=now - timedelta(days=30),  # Haven't seen in 30 days
-        is_active=False,
-    )
-    session.add(job_h)
-    jobs.append(job_h)
-
-    session.flush()
-    return jobs
-
-
-def create_job_source_postings(session: Session, jobs: list[Job]) -> None:
-    """Create source postings for jobs (they come from different job boards)."""
-    now = datetime.now(UTC)
-
-    # Job A from Greenhouse
-    JobSourcePosting(
-        job_id=jobs[0].id,
-        source="greenhouse",
-        source_job_id="acme_123456",
-        original_url="https://jobs.greenhouse.io/dataviz/jobs/senior-backend",
-        raw_data={"job_id": "acme_123456", "title": jobs[0].title},
-        normalized_data={},
-        first_seen=now - timedelta(days=5),
-        last_seen=now,
-        is_active=True,
-    )
-
-    # Job B from Lever
-    JobSourcePosting(
-        job_id=jobs[1].id,
-        source="lever",
-        source_job_id="webservices_789",
-        original_url="https://jobs.lever.co/webservices/position",
-        raw_data={"id": "webservices_789", "text": jobs[1].title},
-        normalized_data={},
-        first_seen=now - timedelta(days=3),
-        last_seen=now,
-        is_active=True,
-    )
-
-    # Job F from both Greenhouse and Lever (cross-source duplicate)
-    JobSourcePosting(
-        job_id=jobs[5].id,
-        source="greenhouse",
-        source_job_id="multicloud_555",
-        original_url="https://jobs.greenhouse.io/multicloud/jobs/devops",
-        raw_data={"job_id": "multicloud_555", "title": jobs[5].title},
-        normalized_data={},
-        first_seen=now - timedelta(days=7),
-        last_seen=now,
-        is_active=True,
-    )
-
-    JobSourcePosting(
-        job_id=jobs[5].id,
-        source="lever",
-        source_job_id="multicloud_lever_888",
-        original_url="https://jobs.lever.co/multicloud/devops-engineer",
-        raw_data={"id": "multicloud_lever_888", "text": jobs[5].title},
-        normalized_data={},
-        first_seen=now - timedelta(days=7),
-        last_seen=now,
-        is_active=True,
-    )
-
-    # Add postings for other jobs
-    for idx, job in enumerate(jobs[2:], 2):
-        source = "greenhouse" if idx % 2 == 0 else "lever"
-        JobSourcePosting(
-            job_id=job.id,
-            source=source,
-            source_job_id=f"source_{idx}_{idx * 100}",
-            original_url=f"https://jobs.example.com/{idx}",
-            raw_data={"id": f"{idx}", "title": job.title},
-            normalized_data={},
-            first_seen=job.first_seen,
-            last_seen=job.last_seen,
-            is_active=job.is_active,
-        )
-
-
-def create_user_jobs(session: Session, user: User, jobs: list[Job]) -> list[UserJob]:
-    """Create UserJob records (discovered/saved jobs for the user)."""
-    user_jobs = []
-    for job in jobs:
-        # All jobs are discovered
-        user_job = UserJob(
-            user_id=user.id,
-            job_id=job.id,
-            is_saved=True,  # User has seen and interacted with these
-        )
-        session.add(user_job)
-        user_jobs.append(user_job)
-    session.flush()
-    return user_jobs
-
-
-def create_candidate_profile_snapshot(session: Session, user: User) -> CandidateProfileVersion:
-    """Create a candidate profile snapshot for matching."""
-    now = datetime.now(UTC)
-    snapshot = CandidateProfileVersion(
-        user_id=user.id,
-        snapshot_data={
-            "profile": {
-                "current_job_title": "Senior Software Engineer",
-                "years_of_experience": 7,
-                "seniority_level": "Senior",
-            },
-            "skills": [
-                {"name": "Python", "proficiency": "ADVANCED"},
-                {"name": "TypeScript", "proficiency": "ADVANCED"},
-                {"name": "React", "proficiency": "ADVANCED"},
-                {"name": "PostgreSQL", "proficiency": "ADVANCED"},
-                {"name": "AWS", "proficiency": "INTERMEDIATE"},
-                {"name": "Docker", "proficiency": "INTERMEDIATE"},
-                {"name": "FastAPI", "proficiency": "ADVANCED"},
-            ],
-            "languages": [
-                {"name": "German", "cefr_level": "C2"},
-                {"name": "English", "cefr_level": "C1"},
-            ],
-            "preferences": {
-                "locations": ["München", "Berlin", "Remote"],
-                "work_models": ["HYBRID", "REMOTE"],
-                "salary_min": 85000,
-                "salary_max": 130000,
-                "willing_to_relocate": False,
-            },
-        },
-        created_at=now,
-    )
-    session.add(snapshot)
-    session.flush()
-    return snapshot
-
-
-def create_sample_applications(
-    session: Session, user: User, jobs: list[Job], user_jobs: list[UserJob], resume: Resume
-) -> None:
-    """Create some seeded applications in different states for testing tracking/dashboard."""
-    now = datetime.now(UTC)
-
-    # Application 1: Job A in SUBMITTED state (for testing the real journey)
-    # Don't create this one - let it be created by the real user flow
-
-    # Application 2: Job B in PREPARING state
-    app2 = Application(
-        user_id=user.id,
-        user_job_id=user_jobs[1].id,
-        job_id=jobs[1].id,
-        resume_id=resume.id,
-        status=ApplicationStatus.PREPARING,
-        mention_salary_in_letter=True,
-        available_from=now.date() + timedelta(days=30),
-        work_authorization=WorkAuthorization.AUTHORIZED,
-        notes="Good fit, but need to prepare tailored CV first",
-    )
-    session.add(app2)
-
-    # Application 3: Job C in DRAFT state
-    app3 = Application(
-        user_id=user.id,
-        user_job_id=user_jobs[2].id,
-        job_id=jobs[2].id,
-        resume_id=resume.id,
-        status=ApplicationStatus.DRAFT,
-        notes="Skills don't align perfectly, needs further consideration",
-    )
-    session.add(app3)
-
-    # Application 4: Job D in IN_PROGRESS state
-    app4 = Application(
-        user_id=user.id,
-        user_job_id=user_jobs[3].id,
-        job_id=jobs[3].id,
-        resume_id=resume.id,
-        status=ApplicationStatus.IN_PROGRESS,
-        notes="Application in progress, waiting on feedback",
-    )
-    session.add(app4)
-
-    # Application 5: Job G (German job) in INTERVIEWING state
-    app5 = Application(
-        user_id=user.id,
-        user_job_id=user_jobs[6].id,
-        job_id=jobs[6].id,
-        resume_id=resume.id,
-        status=ApplicationStatus.INTERVIEWING,
-        application_language="de",
-        notes="First interview scheduled for next week",
-    )
-    session.add(app5)
-
-    # Application 6: Job C in REJECTED state (for tracking testing)
-    # Note: Can't reuse the same job for two applications (unique constraint on user_job_id)
-    # So we'll use a different job (Job H)
-    app6 = Application(
-        user_id=user.id,
-        user_job_id=user_jobs[7].id,
-        job_id=jobs[7].id,
-        resume_id=resume.id,
-        status=ApplicationStatus.REJECTED,
-        notes="Rejected - position filled",
-    )
-    session.add(app6)
-
-    session.flush()
-
-
-def add_deal_breakers(session: Session, user: User) -> None:
-    """Add deal breakers to user's job preferences."""
-    # Salary minimum
-    deal_breaker1 = DealBreaker(
-        user_id=user.id,
-        type=DealBreakerType.MINIMUM_SALARY,
-        value="85000",
-        enabled=True,
-    )
-    session.add(deal_breaker1)
-
-    # Remote requirement (user wants hybrid/remote, not on-site)
-    deal_breaker2 = DealBreaker(
-        user_id=user.id,
-        type=DealBreakerType.REMOTE_REQUIREMENT,
-        value="hybrid_or_remote",
-        enabled=True,
-    )
-    session.add(deal_breaker2)
-
-
-def seed_database() -> None:
-    """Run the complete seeding process."""
-    engine = create_engine(settings.DATABASE_URL)
-    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    session = SessionLocal()
-
+    if settings.is_production:
+        print("Refusing to seed synthetic test data: APP_ENV=production.", file=sys.stderr)
+        return 2
     try:
-        print("Creating test user...")
-        user = create_test_user(session)
+        current = schema_is_current(engine)
+    except Exception as exc:  # noqa: BLE001 -- report and stop
+        print(f"Database not reachable: {type(exc).__name__}.", file=sys.stderr)
+        return 1
+    if not current:
+        print(
+            "The database schema is not at the current migration. Start the backend first "
+            "(it migrates on start: `docker compose up`), or run `python -m app.db.migrate`.",
+            file=sys.stderr,
+        )
+        return 1
 
-        print("Creating personal profile...")
-        create_personal_profile(session, user)
-
-        print("Creating professional profile...")
-        create_professional_profile(session, user)
-
-        print("Creating job preferences...")
-        create_job_preferences(session, user)
-
-        print("Adding skills...")
-        add_skills(session, user)
-
-        print("Adding languages...")
-        add_languages(session, user)
-
-        print("Adding deal breakers...")
-        add_deal_breakers(session, user)
-
-        print("Creating synthetic resume...")
-        resume = create_synthetic_resume(session, user)
-
-        print("Creating candidate profile snapshot...")
-        create_candidate_profile_snapshot(session, user)
-
-        print("Creating test jobs...")
-        jobs = create_test_jobs(session)
-
-        print("Creating job source postings...")
-        create_job_source_postings(session, jobs)
-
-        print("Creating user jobs...")
-        user_jobs = create_user_jobs(session, user, jobs)
-
-        print("Creating sample applications...")
-        create_sample_applications(session, user, jobs, user_jobs, resume)
-
-        session.commit()
-        print("\n✓ Database seeded successfully!")
-        print(f"\nTest User Credentials:")
-        print(f"  Email: test.user@example.local")
-        print(f"  Password: TestPassword123!")
-        print(f"\nCreated:")
-        print(f"  - 1 test user with complete profile")
-        print(f"  - 1 synthetic resume with employment history")
-        print(f"  - 8 test jobs with different scenarios")
-        print(f"  - 6 sample applications in different states")
-        print(f"  - Cross-source job duplicate (for testing deduplication)")
-
-    except Exception as e:
-        session.rollback()
-        print(f"✗ Error seeding database: {e}")
-        raise
-    finally:
-        session.close()
+    with SessionLocal() as db:
+        existing = _find_test_user(db)
+        if existing is not None:
+            if not args.reset:
+                print(f"Test user {TEST_EMAIL} already exists; nothing changed.")
+                print("Use --reset to delete it and seed again.")
+                _print_credentials()
+                return 0
+            report = deletion.delete_account(db, existing, get_file_storage())
+            print(
+                f"Deleted the existing test user ({sum(report.deleted_rows.values())} records, "
+                f"{report.deleted_files} files)."
+            )
+        seed(db)
+    print("Seeded synthetic manual-test data:")
+    print("  - profile, 8 skills, 3 languages, job preferences with a deal breaker")
+    print("  - 1 resume (DOCX, not yet analyzed: analysis needs an AI provider)")
+    print(f"  - {len(JOBS)} synthetic jobs via the discovery pipeline (one on two sources)")
+    print("  - deterministic matches, 1 saved job, 5 applications in different states")
+    _print_credentials()
+    return 0
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Seed JobPilot with manual test data")
-    parser.add_argument("--reset", action="store_true", help="Reset database before seeding")
-    args = parser.parse_args()
-
-    if args.reset:
-        print("WARNING: This will delete all data in the database!")
-        response = input("Continue? (type 'yes' to confirm): ")
-        if response.lower() != "yes":
-            print("Cancelled.")
-            return
-
-        engine = create_engine(settings.DATABASE_URL)
-        with engine.begin() as connection:
-            connection.execute(text("DROP SCHEMA public CASCADE"))
-            connection.execute(text("CREATE SCHEMA public"))
-        print("Database reset.")
-
-        # Run migrations
-        print("Running migrations...")
-        from alembic.config import Config
-        from alembic import command
-
-        alembic_cfg = Config("alembic.ini")
-        command.upgrade(alembic_cfg, "head")
-        print("Migrations complete.")
-
-    seed_database()
+def _print_credentials() -> None:
+    print()
+    print("  Open    http://localhost:3000/login")
+    print(f"  E-mail  {TEST_EMAIL}")
+    print(f"  Password {TEST_PASSWORD}")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

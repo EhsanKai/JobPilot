@@ -20,11 +20,13 @@ class AppError(Exception):
         message: str,
         status_code: int = status.HTTP_400_BAD_REQUEST,
         details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.code = code
         self.message = message
         self.status_code = status_code
         self.details = details or {}
+        self.headers = headers
         super().__init__(message)
 
 
@@ -52,6 +54,18 @@ class ConflictError(AppError):
         super().__init__("CONFLICT", message, status.HTTP_409_CONFLICT, details)
 
 
+class TooManyRequestsError(AppError):
+    def __init__(self, message: str, retry_after_seconds: float) -> None:
+        retry_after = max(1, int(retry_after_seconds + 0.999))
+        super().__init__(
+            "TOO_MANY_ATTEMPTS",
+            message,
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            {"retry_after_seconds": retry_after},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 class ValidationAppError(AppError):
     def __init__(
         self, message: str = "Invalid request", details: dict[str, Any] | None = None
@@ -60,18 +74,23 @@ class ValidationAppError(AppError):
 
 
 def _error_response(
-    code: str, message: str, status_code: int, details: dict[str, Any] | None = None
+    code: str,
+    message: str,
+    status_code: int,
+    details: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, "message": message, "details": details or {}}},
+        headers=headers,
     )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-        return _error_response(exc.code, exc.message, exc.status_code, exc.details)
+        return _error_response(exc.code, exc.message, exc.status_code, exc.details, exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(
@@ -85,11 +104,17 @@ def register_exception_handlers(app: FastAPI) -> None:
         message = (
             errors[0]["msg"].removeprefix("Value error, ") if errors else "Invalid request data"
         )
+        # Never echo the submitted value back (V0.13): it may be a password, a CV or an
+        # answer. Location, type and message are enough for the frontend.
+        safe = [
+            {key: value for key, value in error.items() if key not in ("input", "url", "ctx")}
+            for error in errors
+        ]
         return _error_response(
             "VALIDATION_ERROR",
             message,
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"errors": jsonable_encoder(errors)},
+            {"errors": jsonable_encoder(safe)},
         )
 
     @app.exception_handler(StarletteHTTPException)

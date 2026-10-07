@@ -42,6 +42,7 @@ from app.ai.provider import (
     AIRateLimitError,
     AITimeoutError,
 )
+from app.ai.providers.disabled import AIProcessingDisabledByUserError
 from app.core.config import settings
 from app.core.errors import AppError, NotFoundError
 from app.core.logging import get_logger
@@ -104,6 +105,11 @@ ABANDONED_MESSAGE = "This generation did not finish. Please try again."
 #: AI failure -> (HTTP status, user-safe message). Provider errors and their
 #: technical reasons are logged by code and type only and never returned.
 _AI_FAILURES: tuple[tuple[type[AIError], int, str], ...] = (
+    (
+        AIProcessingDisabledByUserError,
+        409,
+        AIProcessingDisabledByUserError.user_message,
+    ),
     (
         AINotConfiguredError,
         503,

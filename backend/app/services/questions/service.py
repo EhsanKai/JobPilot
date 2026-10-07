@@ -47,6 +47,7 @@ from app.ai.provider import (
     AIRateLimitError,
     AITimeoutError,
 )
+from app.ai.providers.disabled import AIProcessingDisabledByUserError
 from app.core.errors import AppError, ConflictError, NotFoundError, ValidationAppError
 from app.core.logging import get_logger
 from app.models.application_question import (
@@ -102,6 +103,11 @@ REJECTED_MESSAGE = (
 )
 
 _AI_FAILURES: tuple[tuple[type[AIError], int, str], ...] = (
+    (
+        AIProcessingDisabledByUserError,
+        409,
+        AIProcessingDisabledByUserError.user_message,
+    ),
     (
         AINotConfiguredError,
         503,

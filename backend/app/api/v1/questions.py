@@ -16,9 +16,8 @@ import uuid
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.ai.factory import get_ai_provider
 from app.ai.provider import AIProvider
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_user_ai_provider
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.application_question import (
@@ -111,7 +110,7 @@ async def generate_answer(
     request: GenerateRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> QuestionRead:
     """Suggest a first answer: from the application's own data when it states
     it (no AI), else with the AI, grounded in your confirmed resume. Your
@@ -128,7 +127,7 @@ async def regenerate_answer(
     request: GenerateRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> QuestionRead:
     """A new suggestion. The earlier attempt stays in the history; your
     answer, if you have one, is not touched (and the request must

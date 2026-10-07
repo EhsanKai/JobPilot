@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import get_current_user, get_resume_parser
+from app.core.config import settings
 from app.core.errors import NotFoundError
 from app.db.session import get_db, get_session_factory
 from app.models.user import User
@@ -21,6 +22,7 @@ from app.services import resume_service
 from app.services.resume_intelligence import processing_service, review_service
 from app.services.resume_intelligence.parser import ResumeParser
 from app.services.storage import FileStorage, get_file_storage
+from app.services.storage.uploads import read_bounded
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
 
@@ -49,7 +51,8 @@ async def upload_resume(
     db: Session = Depends(get_db),
     storage: FileStorage = Depends(get_file_storage),
 ) -> ResumeRead:
-    content = await file.read()
+    # Read one byte past the limit at most: enough to tell "too large" (V0.13).
+    content = await read_bounded(file, settings.MAX_RESUME_SIZE_MB * 1024 * 1024)
     resume = resume_service.upload_resume(
         db,
         current_user,

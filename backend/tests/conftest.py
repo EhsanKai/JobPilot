@@ -11,6 +11,7 @@ os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://jobpilot:jobpilot@localhost:5432/jobpilot_test"
 )
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("STORAGE_PROVIDER", "local")
 # Tests must never reach a real (paid) AI API.
 os.environ["AI_PROVIDER"] = "disabled"
@@ -23,6 +24,7 @@ os.environ["LEVER_SITES"] = ""
 
 from app.ai.factory import get_ai_provider  # noqa: E402
 from app.ai.provider import AIProvider  # noqa: E402
+from app.core.rate_limit import auth_limiter  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import get_db, get_session_factory  # noqa: E402
 from app.main import app  # noqa: E402
@@ -53,9 +55,16 @@ def _create_schema() -> Generator[None, None, None]:
 @pytest.fixture(autouse=True)
 def _clean_tables() -> Generator[None, None, None]:
     yield
+    # One statement for all tables: per-table TRUNCATEs cost ~1 s per test.
+    tables = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
     with engine.begin() as connection:
-        for table in reversed(Base.metadata.sorted_tables):
-            connection.execute(text(f'TRUNCATE TABLE "{table.name}" CASCADE'))
+        connection.execute(text(f"TRUNCATE TABLE {tables} CASCADE"))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits() -> None:
+    # Every test client calls from the same address: each test starts with a clean count.
+    auth_limiter.reset()
 
 
 @pytest.fixture(autouse=True)

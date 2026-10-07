@@ -186,7 +186,8 @@ def test_scanned_pdf_reports_ocr_required_without_calling_ai(
 def test_unreadable_file_fails_with_extraction_error(
     client: TestClient, auth: dict[str, str], fake_ai: FakeAIProvider
 ) -> None:
-    resume = _upload(client, auth, b"not really a pdf")
+    # A PDF header (so the V0.13 upload type check accepts it), but no readable PDF.
+    resume = _upload(client, auth, b"%PDF-1.4\nnot really a pdf")
     _process(client, auth, resume["id"])
 
     body = _profile(client, auth, resume["id"])

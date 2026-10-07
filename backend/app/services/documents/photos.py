@@ -26,6 +26,7 @@ from app.models.user import User
 from app.schemas.generated_documents import PhotoRead
 from app.services.applications.service import get_owned_application
 from app.services.storage.base import FileStorage
+from app.services.storage.uploads import safe_file_name
 
 _SIGNATURES: tuple[tuple[bytes, str, str], ...] = (
     (b"\xff\xd8\xff", "image/jpeg", "jpg"),
@@ -94,7 +95,7 @@ def save_photo(
         db.add(row)
     row.storage_reference = stored.reference
     row.content_type = content_type
-    row.file_name = (file_name or f"photo.{extension}")[:255]
+    row.file_name = safe_file_name(file_name, f"photo.{extension}")
     row.size_bytes = stored.size
     db.commit()
     db.refresh(row)

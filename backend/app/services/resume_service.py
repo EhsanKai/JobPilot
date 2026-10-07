@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
 from app.models.resume import Resume, ResumeStatus
 from app.models.user import User
+from app.services.storage import uploads
 from app.services.storage.base import FileStorage
 
 ALLOWED_MIME_TYPES = {
@@ -18,6 +19,9 @@ ALLOWED_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+
+
+_EXTENSION_FOR = {uploads.PDF: ".pdf", uploads.DOCX: ".docx"}
 
 
 def _validate_upload(file_name: str, mime_type: str, file_size: int) -> None:
@@ -34,6 +38,20 @@ def _validate_upload(file_name: str, mime_type: str, file_size: int) -> None:
             f"Resume exceeds the maximum size of {settings.MAX_RESUME_SIZE_MB}MB.",
             {"file_size": file_size, "max_bytes": max_bytes},
         )
+
+
+def _verified_type(file_name: str, raw: bytes) -> str:
+    """The file's real type, from its bytes (V0.13). The browser's MIME type and the
+    extension are claims; a file whose content is not the PDF / DOCX its name says is
+    refused (an executable or HTML page renamed to .pdf, a ZIP renamed to .docx)."""
+    actual = uploads.sniff_document(raw)
+    extension = "." + file_name.rsplit(".", 1)[-1].lower()
+    if actual is None or _EXTENSION_FOR[actual] != extension:
+        raise ValidationAppError(
+            "This file is not a valid PDF or DOCX document.",
+            {"file_name": file_name},
+        )
+    return actual
 
 
 def get_resume_for_user(db: Session, user: User) -> Resume | None:
@@ -68,12 +86,14 @@ def upload_resume(
     file_size: int,
     content: BinaryIO,
 ) -> Resume:
+    file_name = uploads.safe_file_name(file_name, "resume")
     _validate_upload(file_name, mime_type, file_size)
 
     # Since V0.2 a new upload becomes a new *version*: previous versions (and
     # anything extracted from them) are kept until the user deletes them, so
     # the original file is never lost or overwritten.
     raw = content.read()
+    mime_type = _verified_type(file_name, raw)
     file_hash = hashlib.sha256(raw).hexdigest()
     next_version = (
         db.execute(

@@ -13,9 +13,9 @@ import uuid
 from fastapi import APIRouter, Depends, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.ai.factory import get_ai_provider
 from app.ai.provider import AIProvider
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_user_ai_provider
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.generated_document import GeneratedDocumentType
 from app.models.user import User
@@ -29,6 +29,7 @@ from app.schemas.generated_documents import (
 )
 from app.services.documents import photos, service
 from app.services.storage import FileStorage, get_file_storage
+from app.services.storage.uploads import read_bounded
 
 router = APIRouter(prefix="/applications/{application_id}/documents", tags=["documents"])
 
@@ -60,7 +61,7 @@ async def generate_cv(
     request: GenerateDocumentRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> GeneratedDocumentRead:
     """Generate a new version of the tailored CV. Only a document that passes
     truth validation against your confirmed resume is saved."""
@@ -77,7 +78,7 @@ async def generate_cover_letter(
     request: GenerateDocumentRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> GeneratedDocumentRead:
     """Generate a new version of the Anschreiben, in the application language."""
     return await service.generate(
@@ -95,7 +96,7 @@ async def humanize_cover_letter(
     request: HumanizeRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> GeneratedDocumentRead:
     """Reword the current Anschreiben (or `base_document_id`) for a natural tone,
     as a NEW version. It goes through the same truth validation as a generated letter;
@@ -134,7 +135,7 @@ async def put_photo(
     storage: FileStorage = Depends(get_file_storage),
 ) -> PhotoRead:
     """Add or replace your photo (JPEG or PNG). Only you ever change it: no AI does."""
-    content = await file.read()
+    content = await read_bounded(file, settings.MAX_PHOTO_SIZE_MB * 1024 * 1024)
     return photos.save_photo(
         db,
         current_user,

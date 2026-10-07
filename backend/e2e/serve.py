@@ -161,6 +161,10 @@ def main() -> None:
     # Many users share this one server in a full E2E run, and a stopped or submitted session
     # keeps its browser open for the user (by design): allow more than the default 3.
     settings.AUTOMATION_MAX_BROWSERS = 10
+    # A full run registers dozens of test users from 127.0.0.1 within minutes; production
+    # limits would (correctly) throttle that. The limiter itself is covered by pytest.
+    settings.REGISTRATION_MAX_PER_IP = 10_000
+    settings.LOGIN_MAX_ATTEMPTS_PER_IP = 10_000
     chromium = os.environ.get("E2E_CHROMIUM_PATH")
     if chromium:
         settings.AUTOMATION_CHROMIUM_PATH = chromium
