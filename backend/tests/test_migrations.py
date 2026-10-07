@@ -2173,7 +2173,8 @@ def test_v011_data_survives_v012_upgrade_downgrade_upgrade(migration_db: Engine)
         ("SAVED", "PREPARING"),
         ("PREPARING", "INTERVIEW"),
     ]
-    assert interviewing[2]["source"] == "SYSTEM" and interviewing[2]["submission_attempt_id"] is None
+    assert interviewing[2]["source"] == "SYSTEM"
+    assert interviewing[2]["submission_attempt_id"] is None
     for application_id, current in statuses(migration_db).items():
         history = history_of(migration_db, application_id)
         assert history[-1]["new"] == current
@@ -2188,7 +2189,8 @@ def test_v011_data_survives_v012_upgrade_downgrade_upgrade(migration_db: Engine)
         )
     }
     assert tracking[APPLICATION_ID]["applied_at"].isoformat() == "2026-10-04T09:00:09+00:00"
-    assert tracking[APPLICATION_ID]["last_status_change_at"] == tracking[APPLICATION_ID]["applied_at"]
+    submitted_tracking = tracking[APPLICATION_ID]
+    assert submitted_tracking["last_status_change_at"] == submitted_tracking["applied_at"]
     assert tracking[V07_ONLY_APPLICATION]["applied_at"] is None
     assert tracking[INTERVIEWING_APPLICATION]["applied_at"] is not None
     assert all(t["follow_up_at"] is None for t in tracking.values())
