@@ -1,0 +1,584 @@
+{
+  "started_at": "2026-10-06T10:35:30.664217+00:00",
+  "probes": [
+    {
+      "provider": "greenhouse",
+      "board": "getyourguide",
+      "url": "https://boards-api.greenhouse.io/v1/boards/getyourguide/jobs?content=true",
+      "reachable": true,
+      "http_status": 200,
+      "error": null,
+      "retry_after": null,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "jobs",
+          "meta"
+        ],
+        "items": 54,
+        "first_item_keys": [
+          "absolute_url",
+          "ai_disclaimer",
+          "ai_opt_out_request_url",
+          "application_deadline",
+          "company_name",
+          "content",
+          "data_compliance",
+          "departments",
+          "first_published",
+          "id",
+          "include_ai_disclaimer",
+          "internal_job_id",
+          "language",
+          "location",
+          "metadata",
+          "offices",
+          "requisition_id",
+          "title",
+          "updated_at"
+        ]
+      }
+    },
+    {
+      "provider": "greenhouse",
+      "board": "hellofresh",
+      "url": "https://boards-api.greenhouse.io/v1/boards/hellofresh/jobs?content=true",
+      "reachable": true,
+      "http_status": 200,
+      "error": null,
+      "retry_after": null,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "jobs",
+          "meta"
+        ],
+        "items": 411,
+        "first_item_keys": [
+          "absolute_url",
+          "ai_disclaimer",
+          "ai_opt_out_request_url",
+          "application_deadline",
+          "company_name",
+          "content",
+          "data_compliance",
+          "departments",
+          "first_published",
+          "id",
+          "include_ai_disclaimer",
+          "internal_job_id",
+          "language",
+          "location",
+          "metadata",
+          "offices",
+          "requisition_id",
+          "title",
+          "updated_at"
+        ]
+      }
+    },
+    {
+      "provider": "greenhouse",
+      "board": "grover",
+      "url": "https://boards-api.greenhouse.io/v1/boards/grover/jobs?content=true",
+      "reachable": true,
+      "http_status": 200,
+      "error": null,
+      "retry_after": null,
+      "shape": {
+        "type": "object",
+        "keys": [
+          "jobs",
+          "meta"
+        ],
+        "items": 3,
+        "first_item_keys": [
+          "absolute_url",
+          "ai_disclaimer",
+          "ai_opt_out_request_url",
+          "application_deadline",
+          "company_name",
+          "content",
+          "data_compliance",
+          "departments",
+          "first_published",
+          "id",
+          "include_ai_disclaimer",
+          "internal_job_id",
+          "language",
+          "location",
+          "metadata",
+          "offices",
+          "requisition_id",
+          "title",
+          "updated_at"
+        ]
+      }
+    },
+    {
+      "provider": "lever",
+      "board": "ppro",
+      "url": "https://api.lever.co/v0/postings/ppro?mode=json&limit=1",
+      "reachable": true,
+      "http_status": 200,
+      "error": null,
+      "retry_after": null,
+      "shape": {
+        "type": "array",
+        "items": 0
+      }
+    },
+    {
+      "provider": "lever",
+      "board": "netlight",
+      "url": "https://api.lever.co/v0/postings/netlight?mode=json&limit=1",
+      "reachable": true,
+      "http_status": 200,
+      "error": null,
+      "retry_after": null,
+      "shape": {
+        "type": "array",
+        "items": 1,
+        "first_item_keys": [
+          "additional",
+          "additionalPlain",
+          "applyUrl",
+          "categories",
+          "country",
+          "createdAt",
+          "description",
+          "descriptionBody",
+          "descriptionBodyPlain",
+          "descriptionPlain",
+          "hostedUrl",
+          "id",
+          "lists",
+          "opening",
+          "openingPlain",
+          "text",
+          "workplaceType"
+        ]
+      }
+    }
+  ],
+  "providers": {
+    "greenhouse": {
+      "boards": 3,
+      "reachable_boards": 3
+    },
+    "lever": {
+      "boards": 2,
+      "reachable_boards": 2
+    }
+  },
+  "runs": [
+    {
+      "fetched": 503,
+      "invalid": 0,
+      "filtered_out": 0,
+      "beyond_limit": 268,
+      "duplicates": 0,
+      "created": 235,
+      "merged": 0,
+      "updated": 0,
+      "unchanged": 0,
+      "cross_source_matches": 0,
+      "possible_matches": 0,
+      "skipped": 268,
+      "error_count": 0,
+      "retried_requests": 0,
+      "discovered": 235,
+      "sources": [
+        {
+          "fetched": 468,
+          "invalid": 0,
+          "filtered_out": 0,
+          "beyond_limit": 268,
+          "duplicates": 0,
+          "created": 200,
+          "merged": 0,
+          "updated": 0,
+          "unchanged": 0,
+          "cross_source_matches": 0,
+          "possible_matches": 0,
+          "skipped": 268,
+          "error_count": 0,
+          "retried_requests": 0,
+          "discovered": 200,
+          "source": "greenhouse",
+          "display_name": "Greenhouse",
+          "status": "succeeded",
+          "errors": [],
+          "filters": []
+        },
+        {
+          "fetched": 35,
+          "invalid": 0,
+          "filtered_out": 0,
+          "beyond_limit": 0,
+          "duplicates": 0,
+          "created": 35,
+          "merged": 0,
+          "updated": 0,
+          "unchanged": 0,
+          "cross_source_matches": 0,
+          "possible_matches": 0,
+          "skipped": 0,
+          "error_count": 0,
+          "retried_requests": 0,
+          "discovered": 35,
+          "source": "lever",
+          "display_name": "Lever",
+          "status": "succeeded",
+          "errors": [],
+          "filters": []
+        }
+      ]
+    },
+    {
+      "fetched": 503,
+      "invalid": 0,
+      "filtered_out": 0,
+      "beyond_limit": 268,
+      "duplicates": 0,
+      "created": 0,
+      "merged": 0,
+      "updated": 0,
+      "unchanged": 235,
+      "cross_source_matches": 0,
+      "possible_matches": 0,
+      "skipped": 268,
+      "error_count": 0,
+      "retried_requests": 0,
+      "discovered": 235,
+      "sources": [
+        {
+          "fetched": 468,
+          "invalid": 0,
+          "filtered_out": 0,
+          "beyond_limit": 268,
+          "duplicates": 0,
+          "created": 0,
+          "merged": 0,
+          "updated": 0,
+          "unchanged": 200,
+          "cross_source_matches": 0,
+          "possible_matches": 0,
+          "skipped": 268,
+          "error_count": 0,
+          "retried_requests": 0,
+          "discovered": 200,
+          "source": "greenhouse",
+          "display_name": "Greenhouse",
+          "status": "succeeded",
+          "errors": [],
+          "filters": []
+        },
+        {
+          "fetched": 35,
+          "invalid": 0,
+          "filtered_out": 0,
+          "beyond_limit": 0,
+          "duplicates": 0,
+          "created": 0,
+          "merged": 0,
+          "updated": 0,
+          "unchanged": 35,
+          "cross_source_matches": 0,
+          "possible_matches": 0,
+          "skipped": 0,
+          "error_count": 0,
+          "retried_requests": 0,
+          "discovered": 35,
+          "source": "lever",
+          "display_name": "Lever",
+          "status": "succeeded",
+          "errors": [],
+          "filters": []
+        }
+      ]
+    }
+  ],
+  "analysis": {
+    "checks": [
+      {
+        "name": "no duplicate source postings",
+        "passed": true,
+        "detail": "0 dupes"
+      },
+      {
+        "name": "every canonical job has a posting",
+        "passed": true,
+        "detail": "0 orphans"
+      },
+      {
+        "name": "repeated discovery creates no jobs",
+        "passed": true,
+        "detail": "created=0 merged=0"
+      },
+      {
+        "name": "first_seen_at stable",
+        "passed": true,
+        "detail": "0 moved"
+      },
+      {
+        "name": "last_seen_at advanced on repeat",
+        "passed": true,
+        "detail": "235/235 advanced"
+      }
+    ],
+    "totals": {
+      "canonical_jobs": 235,
+      "source_postings": 235
+    },
+    "cross_source_jobs": [],
+    "same_company_title_kept_separate": [
+      {
+        "company": "netlight",
+        "title": "software engineering consultant",
+        "jobs": 2,
+        "locations": [
+          "ca:toronto",
+          "fi:helsinki"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "category manager strategic sourcing packaging",
+        "jobs": 2,
+        "locations": [
+          "text:new york ny united states",
+          "text:toronto ontario canada"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "senior ux product designer engagement",
+        "jobs": 2,
+        "locations": [
+          "text:toronto ontario canada",
+          "text:warszawa masovian voivodeship poland"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "production associate",
+        "jobs": 2,
+        "locations": [
+          "text:abbotsford british columbia canada",
+          "text:mississauga ontario canada"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "supply chain planner",
+        "jobs": 2,
+        "locations": [
+          "fr:paris",
+          "text:amsterdam north holland netherlands"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "quality control associate 12 months contract",
+        "jobs": 2,
+        "locations": [
+          "text:abbotsford british columbia canada",
+          "text:edmonton alberta canada"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "quality control associate",
+        "jobs": 2,
+        "locations": [
+          "text:edmonton alberta canada",
+          "text:mississauga ontario canada"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "director customer compensation and policy",
+        "jobs": 3,
+        "locations": [
+          "de:berlin",
+          "text:toronto ontario canada",
+          "text:warszawa masovian voivodeship poland"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "maintenance technician ii",
+        "jobs": 3,
+        "locations": [
+          "text:calgary alberta canada",
+          "text:mississauga ontario canada",
+          "text:newark nj united states"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "carrier performance manager",
+        "jobs": 3,
+        "locations": [
+          "de:berlin",
+          "gb:london",
+          "text:derby england united kingdom"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "lead maintenance technician",
+        "jobs": 2,
+        "locations": [
+          "text:aurora colorado united states",
+          "text:newark nj united states"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "senior analyst sourcing enablement",
+        "jobs": 2,
+        "locations": [
+          "text:boulder colorado united states new york ny united states",
+          "text:toronto ontario canada"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "area manager",
+        "jobs": 2,
+        "locations": [
+          "text:phoenix az united states"
+        ]
+      },
+      {
+        "company": "hellofresh",
+        "title": "people technology integrations manager team lead",
+        "jobs": 2,
+        "locations": [
+          "text:new york ny united states",
+          "text:toronto ontario canada"
+        ]
+      }
+    ],
+    "coverage": {
+      "greenhouse": {
+        "postings": 200,
+        "coverage_pct": {
+          "apply_url": 0.0,
+          "department": 98.5,
+          "description": 100.0,
+          "employment_type": 2.5,
+          "location": 100.0,
+          "location_recognized": 25.5,
+          "multiple_locations": 30.0,
+          "posted_at": 100.0,
+          "remote": 0.0,
+          "requirements": 65.0,
+          "responsibilities": 83.5,
+          "salary_structured": 0.0,
+          "salary_text_only": 0.0,
+          "short_description_lt_30_words": 0.0,
+          "tracking_params_removed": 0.0,
+          "work_model": 0.0
+        },
+        "unrecognized_locations_top": [
+          [
+            "Toronto, Ontario, Canada",
+            17
+          ],
+          [
+            "Calgary, Alberta, Canada",
+            12
+          ],
+          [
+            "Manila, Manila, Philippines",
+            11
+          ],
+          [
+            "Aurora, IL, United States",
+            11
+          ],
+          [
+            "Warszawa, Masovian Voivodeship, Poland",
+            10
+          ],
+          [
+            "Mississauga, Ontario, Canada",
+            9
+          ],
+          [
+            "New York, NY, United States",
+            8
+          ],
+          [
+            "Verden, Niedersachsen, Germany",
+            8
+          ],
+          [
+            "Goodyear, AZ, United States",
+            6
+          ],
+          [
+            "Phoenix, AZ, United States",
+            5
+          ],
+          [
+            "Derby, England, United Kingdom",
+            4
+          ],
+          [
+            "Abbotsford, British Columbia, Canada",
+            4
+          ],
+          [
+            "Newark, NJ, United States",
+            4
+          ],
+          [
+            "Brisbane, Queensland, Australia",
+            3
+          ],
+          [
+            "Edmonton, Alberta, Canada",
+            3
+          ]
+        ]
+      },
+      "lever": {
+        "postings": 35,
+        "coverage_pct": {
+          "apply_url": 100.0,
+          "department": 100.0,
+          "description": 100.0,
+          "employment_type": 88.6,
+          "location": 100.0,
+          "location_recognized": 100.0,
+          "multiple_locations": 14.3,
+          "posted_at": 100.0,
+          "remote": 0.0,
+          "requirements": 82.9,
+          "responsibilities": 25.7,
+          "salary_structured": 0.0,
+          "salary_text_only": 0.0,
+          "short_description_lt_30_words": 0.0,
+          "tracking_params_removed": 0.0,
+          "work_model": 100.0
+        },
+        "unrecognized_locations_top": []
+      }
+    }
+  },
+  "captured_files": [
+    "tests/fixtures/jobs/live/greenhouse/grover.jobs.json",
+    "tests/fixtures/jobs/live/greenhouse/hellofresh.jobs.json",
+    "tests/fixtures/jobs/live/greenhouse/getyourguide.jobs.json",
+    "tests/fixtures/jobs/live/greenhouse/grover.board.json",
+    "tests/fixtures/jobs/live/greenhouse/hellofresh.board.json",
+    "tests/fixtures/jobs/live/greenhouse/getyourguide.board.json",
+    "tests/fixtures/jobs/live/lever/netlight.json",
+    "tests/fixtures/jobs/live/lever/ppro.json"
+  ],
+  "status": "PASS"
+}

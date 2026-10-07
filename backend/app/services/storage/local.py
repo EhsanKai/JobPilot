@@ -1,0 +1,55 @@
+import shutil
+import uuid
+from pathlib import Path
+from typing import BinaryIO
+
+from app.services.storage.base import FileStorage, StoredFile
+
+
+class LocalFileStorage(FileStorage):
+    """Development-grade storage backend that writes to the local filesystem.
+
+    Intended for local development only. Production deployments should use
+    an object-storage backed implementation (S3, GCS, Azure Blob, R2) that
+    satisfies the same `FileStorage` interface.
+    """
+
+    def __init__(self, base_path: str) -> None:
+        self._base_path = Path(base_path).resolve()
+        self._base_path.mkdir(parents=True, exist_ok=True)
+
+    def _resolve(self, reference: str) -> Path:
+        path = (self._base_path / reference).resolve()
+        # References are generated server-side, but never let one escape the
+        # storage root (e.g. "../../etc/passwd").
+        if not path.is_relative_to(self._base_path):
+            raise ValueError("Invalid storage reference.")
+        return path
+
+    def save(self, *, key: str, content: BinaryIO) -> StoredFile:
+        destination = self._resolve(key)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("wb") as f:
+            shutil.copyfileobj(content, f)
+        size = destination.stat().st_size
+        return StoredFile(reference=key, size=size)
+
+    def read(self, *, reference: str) -> bytes:
+        return self._resolve(reference).read_bytes()
+
+    def delete(self, *, reference: str) -> None:
+        path = self._resolve(reference)
+        path.unlink(missing_ok=True)
+
+    def exists(self, *, reference: str) -> bool:
+        return self._resolve(reference).exists()
+
+    def delete_owner(self, *, owner_id: str) -> int:
+        # Only ever a UUID: never let a caller turn this into "delete the storage root".
+        owner = str(uuid.UUID(owner_id))
+        directory = self._resolve(owner)
+        if directory == self._base_path or not directory.is_dir():
+            return 0
+        count = sum(1 for path in directory.rglob("*") if path.is_file())
+        shutil.rmtree(directory)
+        return count

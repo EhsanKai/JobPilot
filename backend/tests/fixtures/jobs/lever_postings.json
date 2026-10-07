@@ -1,0 +1,50 @@
+[
+  {
+    "id": "5ac21346-8e0c-4494-8e7a-3eb92ff77902",
+    "text": "Frontend Engineer",
+    "categories": {
+      "location": "Berlin",
+      "commitment": "Full-time",
+      "team": "Web",
+      "department": "Engineering",
+      "allLocations": ["Berlin", "Hamburg"]
+    },
+    "country": "DE",
+    "opening": "<div>Globex builds tools for planners.</div>",
+    "openingPlain": "Globex builds tools for planners.",
+    "description": "<div>Globex builds tools for planners.</div><div>Join our web team.</div>",
+    "descriptionPlain": "Globex builds tools for planners.\nJoin our web team.",
+    "lists": [
+      { "text": "Requirements", "content": "<li>3+ years of TypeScript and React</li><li>Experience with Next.js</li>" },
+      { "text": "What you'll do", "content": "<li>Build our planning UI</li><li>Improve accessibility</li>" },
+      { "text": "Benefits", "content": "<li>30 days of vacation</li>" }
+    ],
+    "additional": "<div>We are an equal opportunity employer.</div>",
+    "additionalPlain": "We are an equal opportunity employer.",
+    "hostedUrl": "https://jobs.lever.co/globex/5ac21346-8e0c-4494-8e7a-3eb92ff77902",
+    "applyUrl": "https://jobs.lever.co/globex/5ac21346-8e0c-4494-8e7a-3eb92ff77902/apply",
+    "workplaceType": "hybrid",
+    "salaryRange": { "currency": "EUR", "interval": "per-year-salary", "min": 60000, "max": 75000 },
+    "createdAt": 1758000000000
+  },
+  {
+    "id": "b2c4f1d0-1111-4c3e-9a2b-000000000002",
+    "text": "Contract DevOps Engineer",
+    "categories": {
+      "location": "Remote - Germany",
+      "commitment": "Contract",
+      "team": "Platform",
+      "allLocations": ["Remote - Germany"]
+    },
+    "country": "DE",
+    "description": "<p>Terraform, Docker and Kubernetes all day.</p>",
+    "descriptionPlain": "Terraform, Docker and Kubernetes all day.",
+    "lists": [],
+    "additional": "",
+    "additionalPlain": "",
+    "hostedUrl": "https://jobs.lever.co/globex/b2c4f1d0-1111-4c3e-9a2b-000000000002",
+    "applyUrl": "https://jobs.lever.co/globex/b2c4f1d0-1111-4c3e-9a2b-000000000002/apply",
+    "workplaceType": "remote",
+    "createdAt": 1759000000000
+  }
+]

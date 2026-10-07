@@ -1,0 +1,129 @@
+# JobPilot local environment: PostgreSQL + backend (FastAPI) + frontend (Next.js).
+#
+#   docker compose up --build                            # start; open http://localhost:3000
+#   docker compose --profile manual-test up --build      # ... and load the synthetic test data
+#   docker compose down -v                               # stop and DELETE all local data
+#
+# Nothing but Docker is needed on the host. Startup order is enforced by health checks:
+#   postgres healthy -> backend migrates the schema (alembic upgrade head) -> backend
+#   healthy (/health/ready: DB reachable AND schema at head) -> frontend (and seed) start.
+# A failed migration stops the backend with a non-zero exit; nothing starts on top of it.
+#
+# This file is a DEVELOPMENT / MANUAL-TEST setup: its defaults (database password,
+# SECRET_KEY) are public and the backend refuses them when APP_ENV=production.
+# Ports are published on 127.0.0.1 only. See docs/docker-development.md.
+
+name: jobpilot
+
+x-backend-environment: &backend-environment
+  APP_ENV: ${APP_ENV:-development}
+  SECRET_KEY: ${SECRET_KEY:-dev-only-insecure-secret-key-change-me}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+  # Inside Compose the database is the `postgres` service, whatever .env says for host use.
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-jobpilot}:${POSTGRES_PASSWORD:-jobpilot}@postgres:5432/${POSTGRES_DB:-jobpilot}
+  BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+  LOGIN_MAX_FAILED_ATTEMPTS: ${LOGIN_MAX_FAILED_ATTEMPTS:-5}
+  LOGIN_MAX_ATTEMPTS_PER_IP: ${LOGIN_MAX_ATTEMPTS_PER_IP:-30}
+  LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-900}
+  REGISTRATION_MAX_PER_IP: ${REGISTRATION_MAX_PER_IP:-10}
+  TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+  MAX_REQUEST_BODY_MB: ${MAX_REQUEST_BODY_MB:-15}
+  MAX_RESUME_SIZE_MB: ${MAX_RESUME_SIZE_MB:-10}
+  STORAGE_PROVIDER: local
+  STORAGE_PATH: /app/storage/resumes
+  AI_PROVIDER: ${AI_PROVIDER:-anthropic}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  AI_MODEL: ${AI_MODEL:-claude-sonnet-5-5}
+  AI_PROCESSING_DEFAULT_ALLOWED: ${AI_PROCESSING_DEFAULT_ALLOWED:-true}
+  AI_PSEUDONYMIZE_CONTACT_DETAILS: ${AI_PSEUDONYMIZE_CONTACT_DETAILS:-true}
+  JOB_SOURCES_ENABLED: ${JOB_SOURCES_ENABLED:-greenhouse,lever}
+  GREENHOUSE_BOARD_TOKENS: ${GREENHOUSE_BOARD_TOKENS:-getyourguide,hellofresh,grover}
+  LEVER_SITES: ${LEVER_SITES:-ppro:PPRO,netlight:Netlight}
+  LEVER_INSTANCE: ${LEVER_INSTANCE:-global}
+  # No display in a container: the Browser Assistant shows a live screenshot instead.
+  AUTOMATION_BROWSER_HEADLESS: "true"
+  AUTOMATION_ALLOW_PRIVATE_HOSTS: "false"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobpilot}
+      POSTGRES_DB: ${POSTGRES_DB:-jobpilot}
+    ports:
+      # Optional host access for contributors (psql, a GUI). Not needed for testing.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - jobpilot_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  backend:
+    build:
+      context: ./backend
+    image: jobpilot-backend:dev
+    restart: unless-stopped
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - jobpilot_storage:/app/storage
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 512m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status == 200 else 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Compiled into the browser bundle: the URL the *browser* uses to reach the API.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+    image: jobpilot-frontend:dev
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
+
+  # Synthetic manual-test data (test.user@example.com). Opt-in only:
+  #   docker compose --profile manual-test up --build          (with the stack)
+  #   docker compose run --rm seed                              (any time; idempotent)
+  #   docker compose run --rm seed --reset                      (wipe the test user, re-seed)
+  # Refuses to run when APP_ENV=production.
+  seed:
+    profiles: ["manual-test"]
+    image: jobpilot-backend:dev
+    environment: *backend-environment
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - jobpilot_storage:/app/storage
+    entrypoint: ["python", "-m", "scripts.seed_manual_test_data"]
+    command: []
+    restart: "no"
+    healthcheck:
+      disable: true
+
+volumes:
+  jobpilot_postgres_data:
+  jobpilot_storage:

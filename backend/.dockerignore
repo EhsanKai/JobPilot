@@ -1,0 +1,16 @@
+# Only what the runtime image needs is copied explicitly (see Dockerfile); this keeps
+# local state, secrets and caches out of the build context.
+.env
+.env.*
+.venv/
+venv/
+**/__pycache__/
+**/*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+storage/
+uploads/
+tests/
+e2e/
+*.log
