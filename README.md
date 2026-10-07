@@ -597,7 +597,7 @@ GET    /privacy/overview               V0.13: what is stored, why, retention, re
 GET    /privacy/export                 V0.13: ZIP with all your data (JSON) + your files
 GET    /privacy/settings               V0.13: external AI processing choice
 PUT    /privacy/settings
-GET    /privacy/consents               V0.13: recorded decisions (versioned)
+GET    /privacy/decisions              V0.13: recorded privacy decisions (versioned)
 POST   /privacy/delete-account         V0.13: password + "DELETE MY ACCOUNT"
 
 GET    /profile                        personal + professional + industries

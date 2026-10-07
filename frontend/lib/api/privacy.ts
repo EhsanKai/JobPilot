@@ -23,7 +23,7 @@ export function updatePrivacySettings(externalAiProcessingAllowed: boolean): Pro
 }
 
 export async function getConsentHistory(): Promise<ConsentRecord[]> {
-  const body = await api.get<{ records: ConsentRecord[] }>("/privacy/consents");
+  const body = await api.get<{ records: ConsentRecord[] }>("/privacy/decisions");
   return body.records;
 }
 

@@ -334,14 +334,14 @@ def test_ai_choice_is_recorded_versioned_and_revocable(
     assert (
         client.get(settings_url, headers=headers).json()["external_ai_processing_allowed"] is True
     )
-    assert client.get(f"{API}/privacy/consents", headers=headers).json()["records"] == []
+    assert client.get(f"{API}/privacy/decisions", headers=headers).json()["records"] == []
 
     client.put(settings_url, headers=headers, json={"external_ai_processing_allowed": False})
     client.put(
         settings_url, headers=headers, json={"external_ai_processing_allowed": False}
     )  # no-op
     client.put(settings_url, headers=headers, json={"external_ai_processing_allowed": True})
-    records = client.get(f"{API}/privacy/consents", headers=headers).json()["records"]
+    records = client.get(f"{API}/privacy/decisions", headers=headers).json()["records"]
     assert [r["granted"] for r in records] == [True, False]  # newest first, no duplicate
     assert all(r["category"] == "external_ai_processing" and r["policy_version"] for r in records)
     assert set(records[0]) == {"category", "policy_version", "granted", "decided_at"}

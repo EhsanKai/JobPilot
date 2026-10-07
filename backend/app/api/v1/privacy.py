@@ -115,7 +115,7 @@ def update_privacy_settings(
     return _settings_read(current_user, provider)
 
 
-@router.get("/consents", response_model=ConsentHistoryRead)
+@router.get("/decisions", response_model=ConsentHistoryRead)
 def consent_history(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> ConsentHistoryRead:

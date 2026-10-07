@@ -2263,7 +2263,7 @@ def test_v011_data_survives_v012_upgrade_downgrade_upgrade(migration_db: Engine)
     assert [h["new"] for h in history_of(migration_db, APPLICATION_ID)] == [
         "SAVED", "PREPARING", "APPLIED",
     ]
-    assert data_fingerprints(migration_db, untouched) == data_before
+    assert unchanged_fingerprints(migration_db, untouched) == data_before
     with migration_db.connect() as connection:
         diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
     assert diff == []
@@ -2311,6 +2311,25 @@ def legacy_application_columns(engine: Engine) -> list[str]:
     return [c for c in columns_of(engine, "applications") if c not in V012_APPLICATION_COLUMNS]
 
 
+#: Columns V0.13 added to existing tables (users keep every earlier value; the new column is
+#: compared by test_v013_* instead).
+V013_ADDED_COLUMNS = {"users": {"external_ai_processing_allowed"}}
+
+
+def unchanged_fingerprints(engine: Engine, tables: set[str]) -> dict[str, tuple[int, str | None]]:
+    """`data_fingerprints`, but each table on the columns it had before V0.13: comparable with
+    a fingerprint taken at an older revision once the database is at head again."""
+    result = {}
+    for table in sorted(tables):
+        added = V013_ADDED_COLUMNS.get(table)
+        if added:
+            columns = [c for c in columns_of(engine, table) if c not in added]
+            result[table] = column_fingerprint(engine, table, columns)
+        else:
+            result.update(data_fingerprints(engine, {table}))
+    return result
+
+
 def assert_data_unchanged_since(
     engine: Engine,
     tables: set[str],
@@ -2318,7 +2337,92 @@ def assert_data_unchanged_since(
     legacy_columns: list[str],
     applications_before: tuple[int, str | None],
 ) -> None:
-    """Every table in `tables` has the data it had; applications on their pre-V0.12 columns."""
+    """Every table in `tables` has the data it had; applications on their pre-V0.12 columns,
+    users on their pre-V0.13 columns."""
     others = tables - {"applications"}
-    assert data_fingerprints(engine, others) == {k: v for k, v in before.items() if k in others}
+    assert unchanged_fingerprints(engine, others) == {
+        k: v for k, v in before.items() if k in others
+    }
     assert column_fingerprint(engine, "applications", legacy_columns) == applications_before
+
+
+# --- V0.13: auth sessions, consent records, the AI processing choice -------------------------
+
+V013 = "e9c4b2a7d1f3"
+V013_TABLES = {"auth_sessions", "consent_records"}
+
+
+def test_v013_upgrade_keeps_users_and_downgrade_restores_v012_exactly(
+    migration_db: Engine,
+) -> None:
+    config = alembic_config()
+    command.upgrade(config, V012)
+    user_id = uuid.uuid4()
+    execute(
+        migration_db,
+        "INSERT INTO users (id, email, password_hash, first_name, last_name) "
+        "VALUES (:id, 'kept@example.com', 'hash', 'Kept', 'User')",
+        id=user_id,
+    )
+    v012_tables = user_tables(migration_db)
+    data_before = data_fingerprints(migration_db, v012_tables)
+    schema_before = schema_fingerprint(migration_db, v012_tables)
+
+    # V0.12 -> V0.13: additive. Existing users keep every value and today's behaviour
+    # (external AI processing allowed), with no consent record: none was ever asked for.
+    command.upgrade(config, V013)
+    assert user_tables(migration_db) == v012_tables | V013_TABLES
+    assert unchanged_fingerprints(migration_db, v012_tables) == data_before
+    assert rows(
+        migration_db, "SELECT external_ai_processing_allowed AS a FROM users WHERE id = :id",
+        id=user_id,
+    ) == [{"a": True}]
+    assert rows(migration_db, "SELECT count(*) AS n FROM consent_records") == [{"n": 0}]
+    execute(
+        migration_db,
+        "INSERT INTO auth_sessions (id, user_id, expires_at) VALUES (:s, :u, now())",
+        s=uuid.uuid4(), u=user_id,
+    )
+    execute(
+        migration_db,
+        "INSERT INTO consent_records (id, user_id, category, policy_version, granted) "
+        "VALUES (:c, :u, 'external_ai_processing', 'v1', false)",
+        c=uuid.uuid4(), u=user_id,
+    )
+    with pytest.raises(Exception, match="ck_consent_records_category"):
+        execute(
+            migration_db,
+            "INSERT INTO consent_records (id, user_id, category, policy_version, granted) "
+            "VALUES (:c, :u, 'marketing', 'v1', true)",
+            c=uuid.uuid4(), u=user_id,
+        )
+
+    # Deleting a user removes its sessions and records (ON DELETE CASCADE).
+    other = uuid.uuid4()
+    execute(
+        migration_db,
+        "INSERT INTO users (id, email, password_hash, first_name, last_name) "
+        "VALUES (:id, 'gone@example.com', 'hash', 'Gone', 'User')",
+        id=other,
+    )
+    execute(
+        migration_db,
+        "INSERT INTO auth_sessions (id, user_id, expires_at) VALUES (:s, :u, now())",
+        s=uuid.uuid4(), u=other,
+    )
+    execute(migration_db, "DELETE FROM users WHERE id = :id", id=other)
+    assert rows(
+        migration_db, "SELECT count(*) AS n FROM auth_sessions WHERE user_id = :u", u=other
+    ) == [{"n": 0}]
+
+    # V0.13 -> V0.12: exactly the V0.12 schema and data again.
+    command.downgrade(config, V012)
+    assert user_tables(migration_db) == v012_tables
+    assert schema_fingerprint(migration_db, v012_tables) == schema_before
+    assert data_fingerprints(migration_db, v012_tables) == data_before
+
+    # ... and up again, matching the models.
+    command.upgrade(config, "head")
+    with migration_db.connect() as connection:
+        diff = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert diff == []
