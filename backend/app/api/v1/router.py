@@ -11,6 +11,7 @@ from app.api.v1 import (
     profile,
     questions,
     resumes,
+    submission,
     users,
 )
 
@@ -25,5 +26,7 @@ api_router.include_router(applications.router)
 api_router.include_router(documents.router)
 api_router.include_router(documents.photo_router)
 api_router.include_router(questions.router)
+# Before automation: its `/{session_id}` would otherwise swallow `/submissions`.
+api_router.include_router(submission.router)
 api_router.include_router(automation.router)
 api_router.include_router(jobs.router)

@@ -1,4 +1,4 @@
-"""The event log of a session (V0.10): a lightweight trail, not event sourcing.
+"""The event log of a session (V0.10, extended in V0.11): a lightweight trail, not event sourcing.
 
 Events carry a type, optionally the field they are about, and a few codes or
 counts. Never a form value, a URL query, a label's text or anything typed.
@@ -30,3 +30,16 @@ class EventType(str, Enum):
     DOMAIN_CONFIRMED = "DOMAIN_CONFIRMED"
     SUBMIT_DETECTED = "SUBMIT_DETECTED"
     SESSION_FAILED = "SESSION_FAILED"
+    # V0.11 -- review & submit. Codes, ids and hashes only; never a value.
+    FINAL_REVIEW_CREATED = "FINAL_REVIEW_CREATED"
+    FINAL_REVIEW_INVALIDATED = "FINAL_REVIEW_INVALIDATED"
+    CONSENT_AUTHORIZED = "CONSENT_AUTHORIZED"
+    CONSENT_REVOKED = "CONSENT_REVOKED"
+    SUBMISSION_AUTHORIZED = "SUBMISSION_AUTHORIZED"
+    SUBMISSION_AUTHORIZATION_INVALIDATED = "SUBMISSION_AUTHORIZATION_INVALIDATED"
+    SUBMISSION_STARTED = "SUBMISSION_STARTED"
+    SUBMISSION_TRIGGERED = "SUBMISSION_TRIGGERED"
+    SUBMISSION_CONFIRMED = "SUBMISSION_CONFIRMED"
+    SUBMISSION_FAILED = "SUBMISSION_FAILED"
+    SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN"
+    SUBMISSION_VERIFIED_BY_USER = "SUBMISSION_VERIFIED_BY_USER"

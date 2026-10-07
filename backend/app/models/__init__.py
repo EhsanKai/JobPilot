@@ -67,6 +67,15 @@ from app.models.professional_profile import ProfessionalProfile, SeniorityLevel
 from app.models.resume import Resume, ResumeStatus
 from app.models.resume_profile import ResumeProfile, ResumeProfileStatus
 from app.models.skill import Skill, SkillProficiency, UserSkill
+from app.models.submission import (
+    ConsentAuthorization,
+    FinalReview,
+    FinalReviewStatus,
+    SubmissionAttempt,
+    SubmissionAuthorization,
+    SubmissionAuthorizationStatus,
+    SubmissionResult,
+)
 from app.models.user import User
 from app.models.user_job import UserJob
 from app.models.user_profile import UserProfile
@@ -122,6 +131,13 @@ __all__ = [
     "ACTIVE_STATUSES",
     "MappingStatus",
     "FillStatus",
+    "FinalReview",
+    "FinalReviewStatus",
+    "ConsentAuthorization",
+    "SubmissionAuthorization",
+    "SubmissionAuthorizationStatus",
+    "SubmissionAttempt",
+    "SubmissionResult",
     "ApplicationQuestion",
     "ApplicationQuestionAnswer",
     "ApplicationQuestionGeneration",

@@ -25,6 +25,19 @@ Other pages: `/challenge` (a visible CAPTCHA widget), `/login` (a password field
 (the form is built by script after a moment), `/ids` (generated ids such as ":r1:"),
 `/away` (redirects to the same server under another host name: another website),
 `/relabel?label=` (one field whose label changes), `/pdf-only` (a file input that takes PDF only).
+
+V0.11 (review & submit) adds pages whose final button really submits:
+
+    /submit-apply        a realistic application form; submitting it POSTs to the server,
+                         which counts the received application (`received`) and answers
+                         with a confirmation page ("Thank you for your application.
+                         Application ID: EXM-2026-0001")
+    /submit-ambiguous    the same form, but after the press the page only says "Processing..."
+                         and never confirms anything (an ambiguous result)
+    /submit-two-buttons  a form with two buttons that could both submit it
+
+Every press of their final button is counted (`submit_clicks`), whether or not the form
+then submits -- so a test can prove there was exactly one, or none.
 """
 
 import json
@@ -183,6 +196,64 @@ FORM = """
 </script>
 """
 
+# V0.11: count presses of the final button, but let the form really submit.
+_COUNT_CLICKS = """
+<script>
+ document.addEventListener('click', function (e) {
+   var t = e.target.closest('button, input[type=submit]');
+   if (t && t.id === 'submit-btn') navigator.sendBeacon('/__submit?kind=click');
+ }, true);
+</script>
+"""
+
+SUBMIT_FORM = """
+<form id="apply-form" aria-label="Application form" method="post" action="/submit-apply"
+      enctype="multipart/form-data" novalidate>
+ <h2>Apply: Integration Engineer</h2>
+ <label for="first_name">First name *</label>
+ <input id="first_name" name="first_name" type="text" required>
+ <label for="last_name">Last name *</label>
+ <input id="last_name" name="last_name" type="text" required>
+ <label for="email">Email address *</label>
+ <input id="email" name="email" type="email" required>
+ <label for="phone">Phone number</label>
+ <input id="phone" name="phone" type="tel">
+ <label for="years">Years of experience</label>
+ <input id="years" name="years" type="number" min="0">
+ <fieldset>
+  <legend>Are you legally authorized to work in Germany? *</legend>
+  <label><input type="radio" name="authorized" value="yes" required> Yes</label>
+  <label><input type="radio" name="authorized" value="no"> No</label>
+ </fieldset>
+ <label for="motivation">Why do you want to join us? *</label>
+ <textarea id="motivation" name="motivation" rows="4" required></textarea>
+ <label for="cv">Resume / CV *</label>
+ <input id="cv" name="resume" type="file" accept=".pdf,.doc,.docx" required>
+ <label for="cover">Cover letter</label>
+ <input id="cover" name="cover_letter" type="file" accept=".pdf,.doc,.docx">
+ <label><input id="privacy" name="privacy" type="checkbox" required> I agree to the processing of my personal data for this application in accordance with the privacy policy *</label>
+ <label><input id="talent_pool" name="talent_pool" type="checkbox"> Keep my profile in the talent pool for future opportunities</label>
+ <button type="button" id="save-btn">Save draft</button>
+ <button type="submit" id="submit-btn">Submit application</button>
+</form>
+"""
+
+_AMBIGUOUS = """
+<script>
+ document.getElementById('apply-form').addEventListener('submit', function (e) {
+   e.preventDefault();
+   document.getElementById('status').textContent = 'Processing...';
+ });
+</script>
+<p id="status" role="status"></p>
+"""
+
+CONFIRMATION = (
+    "<title>Application received - Example GmbH</title><body><h1>Thank you for your "
+    "application!</h1><p>Your application has been submitted successfully.</p>"
+    "<p>Application ID: {ref}</p></body>"
+)
+
 PAGES = {
     "/apply": f"<title>Apply - Example GmbH</title>{_STYLE}<body>{FORM}{_INSTRUMENT}</body>",
     "/challenge": (
@@ -216,6 +287,21 @@ PAGES = {
         '<label for="cv">Resume / CV</label><input id="cv" name="resume" type="file" '
         'accept=".pdf">'
         f'<button type="submit" id="submit-btn">Submit application</button></form>{_INSTRUMENT}</body>'
+    ),
+    "/submit-apply": (
+        f"<title>Apply - Example GmbH</title>{_STYLE}<body>{SUBMIT_FORM}{_COUNT_CLICKS}</body>"
+    ),
+    "/submit-ambiguous": (
+        f"<title>Apply - Example GmbH</title>{_STYLE}<body>"
+        f"{SUBMIT_FORM}{_AMBIGUOUS}{_COUNT_CLICKS}</body>"
+    ),
+    "/submit-two-buttons": (
+        f"<title>Apply - Example GmbH</title>{_STYLE}<body>"
+        + SUBMIT_FORM.replace(
+            '<button type="button" id="save-btn">Save draft</button>',
+            '<button type="submit" id="apply-now">Apply now</button>',
+        )
+        + f"{_AMBIGUOUS}{_COUNT_CLICKS}</body>"
     ),
     "/ids": (
         f'<title>Apply</title>{_STYLE}<body><form id="f">'
@@ -270,6 +356,13 @@ class _Handler(BaseHTTPRequestHandler):
             )
             self._send(200, page.encode())
             return
+        if path == "/application-received":
+            from html import escape
+            from urllib.parse import parse_qs
+
+            ref = parse_qs(parts.query).get("ref", ["EXM-UNKNOWN"])[0]
+            self._send(200, CONFIRMATION.format(ref=escape(ref)).encode())
+            return
         static = PAGES.get(path)
         if static is None:
             self._send(404, b"<title>Not found</title>")
@@ -282,6 +375,16 @@ class _Handler(BaseHTTPRequestHandler):
         if parts.path == "/__submit":
             self.server.site.record_submit(parts.query)
             self._send(204, b"")
+            return
+        if parts.path == "/submit-apply":
+            # A real submission: read (and discard) the form, count it, confirm it.
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            reference = self.server.site.receive_application()
+            self.send_response(303)
+            self.send_header("Location", f"/application-received?ref={reference}")
+            self.end_headers()
             return
         self._send(404, b"")
 
@@ -299,6 +402,8 @@ class FakeApplicationSite:
         self._lock = threading.Lock()
         self.submissions: list[str] = []
         self.page_loads: dict[str, int] = {}
+        #: Applications the server really received (V0.11 pages).
+        self.received: list[str] = []
 
     @property
     def port(self) -> int:
@@ -324,6 +429,12 @@ class FakeApplicationSite:
         with self._lock:
             self.submissions.append(query or "unknown")
 
+    def receive_application(self) -> str:
+        with self._lock:
+            reference = f"EXM-2026-{len(self.received) + 1:04d}"
+            self.received.append(reference)
+            return reference
+
     @property
     def submit_clicks(self) -> int:
         """How many times the submit button was clicked or the form submitted."""
@@ -332,7 +443,11 @@ class FakeApplicationSite:
 
     def stats(self) -> dict[str, Any]:
         with self._lock:
-            return {"submissions": list(self.submissions), "page_loads": dict(self.page_loads)}
+            return {
+                "submissions": list(self.submissions),
+                "page_loads": dict(self.page_loads),
+                "received": list(self.received),
+            }
 
     def __enter__(self) -> "FakeApplicationSite":
         return self.start()

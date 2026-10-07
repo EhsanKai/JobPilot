@@ -334,3 +334,34 @@ def render(
     if len(data) > MAX_ATTACHMENT_BYTES:
         raise DocumentUnavailable("DOCUMENT_UNAVAILABLE")
     return live.file_name, DOCX_MIME, data
+
+
+# --- V0.11: which exact content is attached -------------------------------------------------------
+
+
+def content_identity(
+    db: Session, user: User, application: Application, choice: DocumentChoice
+) -> str:
+    """A SHA-256 of the exact content of a chosen document version, for the final review.
+
+    A generated version is an immutable row: the hash of its structured content. The
+    resume file: its stored file hash (or, for an old upload without one, its id and
+    version). Never a path."""
+    import hashlib
+    import json
+
+    if choice.type == "resume_file":
+        resume = _application_resume(user, application)
+        if resume is not None and resume.id == choice.id and resume.file_hash:
+            return resume.file_hash
+        return hashlib.sha256(f"resume:{choice.id}:{choice.version_number}".encode()).hexdigest()
+    row = db.scalar(
+        select(GeneratedDocument).where(
+            GeneratedDocument.id == choice.id,
+            GeneratedDocument.application_id == application.id,
+            GeneratedDocument.user_id == user.id,
+        )
+    )
+    content = row.content if row is not None else None
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

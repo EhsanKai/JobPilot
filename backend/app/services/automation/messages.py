@@ -32,9 +32,47 @@ ATTENTION_MESSAGES = {
 }
 
 SUBMISSION_NOTICE = (
-    "The application appears ready for submission. V0.10 does not submit applications. "
-    "Please submit manually."
+    "The application appears ready for submission. Without your explicit authorization, "
+    "JobPilot does not submit applications. Please submit manually, or open Final review "
+    "to check everything and authorize JobPilot to submit it."
 )
+
+#: What came of a submission attempt, in the user's words (V0.11).
+SUBMISSION_RESULT_MESSAGES = {
+    "SUCCESS": "Application submitted successfully.",
+    "FAILED_BEFORE_SUBMIT": (
+        "The application could not be submitted. No submission was confirmed -- the final "
+        "button was not pressed."
+    ),
+    "SUBMISSION_UNKNOWN": (
+        "We could not safely determine whether the application was submitted. For your "
+        "safety, JobPilot will NOT submit again automatically. Please verify the application "
+        "manually."
+    ),
+    "IN_PROGRESS": "Submitting...",
+}
+
+#: Why an attempt ended as it did (`SubmissionAttempt.failure_code`).
+SUBMISSION_FAILURES = {
+    "STATE_CHANGED": "The application changed after your review. Review it again.",
+    "PAGE_RELOADED": "The page was reloaded or changed after your review. Review it again.",
+    "WRONG_DESTINATION": "The browser is no longer on the reviewed website.",
+    "SUBMISSION_BLOCKED": "Something on the page needs you first (see the final review).",
+    "USER_TOOK_CONTROL": "You took control of the browser, so JobPilot did not submit.",
+    "SESSION_NOT_READY": "The browser assistant was not running.",
+    "BROWSER_GONE": "The browser was closed before anything was submitted.",
+    "SUBMIT_CONTROL_NOT_FOUND": "The final button was no longer on the page.",
+    "SUBMIT_CONTROL_DISABLED": "The final button was disabled.",
+    "SUBMIT_CONTROL_NOT_READY": "The final button could not be pressed (hidden or covered).",
+    "NOT_A_SUBMIT_CONTROL": "The final button was not a form button.",
+    "INTERRUPTED": "The server stopped before the final button was pressed.",
+    "NO_CONFIRMATION": "The page did not show a confirmation after the final button was pressed.",
+    "BROWSER_DISCONNECTED": "The browser closed or crashed after the final button was pressed.",
+    "SUBMIT_ERROR": "The browser reported an error while the final button was pressed.",
+    "INTERRUPTED_AFTER_PRESS": "The server stopped after the final button was pressed.",
+    "SUBMIT_ERROR_BEFORE_PRESS": "An error occurred before the final button was pressed.",
+    "PERMIT_REFUSED": "The submission was refused before the final button was pressed.",
+}
 
 #: Why a field was not filled / failed (`AutomationField.fill_error_code`).
 FILL_ERRORS = {

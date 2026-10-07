@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { FieldRow } from "@/components/applications/assistant/FieldRow";
+import { FinalReview } from "@/components/applications/assistant/FinalReview";
 import { LiveView } from "@/components/applications/assistant/LiveView";
+import { SubmissionResult } from "@/components/applications/assistant/SubmissionResult";
 import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -25,6 +27,7 @@ import {
   suggestAnswers,
   takeControl,
 } from "@/lib/api/automation";
+import { listSubmissions } from "@/lib/api/submission";
 import { STATUS_DOT, apiMessage, isActive, summaryLines } from "@/lib/automation";
 import { safeExternalUrl } from "@/lib/jobs";
 import type {
@@ -36,6 +39,7 @@ import type {
   MappingAction,
   SessionList,
 } from "@/types/automation";
+import type { SubmissionAttempt, SubmissionList } from "@/types/submission";
 
 interface Props {
   applicationId: string;
@@ -52,7 +56,11 @@ const ALERT_ATTENTION = ["SECURITY_CHALLENGE", "LOGIN_REQUIRED", "ACCESS_RESTRIC
  * It opens the application's own page in a controlled browser, reads the form, maps each
  * field to a question, and fills only the answers you approved -- each one checked after
  * it is written. You can pause it, take over, edit anything and hand the browser back; it
- * never overwrites what you changed, never ticks a consent for you, and never submits.
+ * never overwrites what you changed and never ticks a consent on its own.
+ *
+ * V0.11: it never submits on its own either. The final review shows exactly what would be
+ * sent; only your explicit, per-consent and final authorization lets JobPilot press the
+ * employer's final button -- once.
  */
 export function BrowserAssistant({ applicationId }: Props) {
   const [list, setList] = useState<SessionList | null>(null);
@@ -63,6 +71,8 @@ export function BrowserAssistant({ applicationId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [submissions, setSubmissions] = useState<SubmissionList | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const mounted = useRef(true);
   const inFlight = useRef(false);
 
@@ -93,7 +103,17 @@ export function BrowserAssistant({ applicationId }: Props) {
     [loadFields]
   );
 
+  const loadSubmissions = useCallback(async () => {
+    try {
+      const loaded = await listSubmissions(applicationId);
+      if (mounted.current) setSubmissions(loaded);
+    } catch {
+      /* shown again on the next load */
+    }
+  }, [applicationId]);
+
   const load = useCallback(async () => {
+    void loadSubmissions();
     try {
       const loaded = await listSessions(applicationId);
       if (!mounted.current) return;
@@ -105,11 +125,20 @@ export function BrowserAssistant({ applicationId }: Props) {
     } catch {
       if (mounted.current) setLoadError("Unable to load the browser assistant. Please try again.");
     }
-  }, [applicationId, loadFields]);
+  }, [applicationId, loadFields, loadSubmissions]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  function onAttempt(attempt: SubmissionAttempt) {
+    setSubmissions((current) => ({
+      items: [attempt, ...(current?.items.filter((a) => a.id !== attempt.id) ?? [])],
+      submitted: (current?.submitted ?? false) || attempt.result === "SUCCESS",
+      needs_verification: attempt.result === "SUBMISSION_UNKNOWN",
+    }));
+    void load();
+  }
 
   // While the assistant is live, keep the view current (the page may move, the user may
   // edit fields, the browser may be closed).
@@ -124,6 +153,8 @@ export function BrowserAssistant({ applicationId }: Props) {
         const fresh = await getSession(applicationId, sessionId);
         if (!mounted.current) return;
         setSession(fresh);
+        // The session ended (a submission ends it too): show what came of it.
+        if (!isActive(fresh)) void loadSubmissions();
         await loadFields(sessionId);
       } catch {
         /* a failed poll changes nothing */
@@ -132,7 +163,7 @@ export function BrowserAssistant({ applicationId }: Props) {
       }
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [active, sessionId, applicationId, loadFields]);
+  }, [active, sessionId, applicationId, loadFields, loadSubmissions]);
 
   async function run(
     name: string,
@@ -238,8 +269,8 @@ export function BrowserAssistant({ applicationId }: Props) {
       <p className="mt-1 text-sm text-slate-500">
         JobPilot fills forms; you remain in control. It opens this application&apos;s own page in
         a browser, reads the form and fills only the answers you approved. You can pause it, take
-        over and change anything at any time. It never submits your application: you do that
-        yourself.
+        over and change anything at any time. It never submits your application on its own:
+        only after your final review and your explicit authorization — and then exactly once.
       </p>
 
       {loadError && (
@@ -256,6 +287,20 @@ export function BrowserAssistant({ applicationId }: Props) {
         <div className="mt-4 flex flex-col gap-4">
           {error && <Alert variant="error">{error}</Alert>}
           {notice && <Alert variant="info">{notice}</Alert>}
+
+          {submitting && (
+            <p role="status" className="text-sm font-medium text-slate-900">
+              Submitting... JobPilot presses the final button once and waits for the
+              employer&apos;s confirmation.
+            </p>
+          )}
+          {!submitting && submissions?.items[0] && (
+            <SubmissionResult
+              applicationId={applicationId}
+              attempt={submissions.items[0]}
+              onChanged={() => void loadSubmissions()}
+            />
+          )}
 
           {session && (
             <section aria-label="Browser assistant status" className="flex flex-col gap-3">
@@ -417,6 +462,21 @@ export function BrowserAssistant({ applicationId }: Props) {
               )}
 
               {live && <LiveView applicationId={applicationId} session={session} />}
+
+              {live &&
+                controls &&
+                (session.status === "RUNNING" || session.status === "COMPLETED") &&
+                !submissions?.submitted && (
+                  <FinalReview
+                    applicationId={applicationId}
+                    session={session}
+                    onTakeControl={() =>
+                      void run("control", () => takeControl(applicationId, session.id))
+                    }
+                    onAttempt={onAttempt}
+                    onSubmitting={setSubmitting}
+                  />
+                )}
             </section>
           )}
 
