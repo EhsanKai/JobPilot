@@ -14,6 +14,7 @@ const NAV_LINKS = [
   { href: "/profile", label: "Profile" },
   { href: "/profile/preferences", label: "Preferences" },
   { href: "/profile/resume", label: "Resume" },
+  { href: "/settings", label: "Settings" },
 ];
 
 interface AppShellProps {
