@@ -20,7 +20,7 @@ nothing else (see `browser/final_submit.py`).
 import asyncio
 import atexit
 import threading
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from app.core.logging import get_logger
@@ -37,6 +37,7 @@ from app.services.automation.browser.base import (
     RawControl,
     RawOption,
 )
+from app.services.automation.browser.egress_proxy import EgressFilterProxy
 from app.services.automation.browser.final_submit import (
     FinalSubmissionChannel,
     OutcomeSignals,
@@ -441,13 +442,21 @@ class PlaywrightFinalSubmission(FinalSubmissionChannel):
 
 class PlaywrightSession(BrowserSession, SupportsFinalSubmission):
     def __init__(
-        self, *, browser: Any, context: Any, page: Any, headless: bool, allow_private: bool
+        self,
+        *,
+        browser: Any,
+        context: Any,
+        page: Any,
+        headless: bool,
+        allow_private: bool,
+        egress_proxy: EgressFilterProxy | None = None,
     ) -> None:
         self._browser = browser
         self._context = context
         self._page = page
         self._headless = headless
         self._allow_private = allow_private
+        self._egress_proxy = egress_proxy
         self._crashed = False
         self._closed = False
         self._api = PlaywrightPage(self)
@@ -562,6 +571,8 @@ class PlaywrightSession(BrowserSession, SupportsFinalSubmission):
                     await closer()
                 except Exception:  # noqa: BLE001 - already gone is fine
                     pass
+            if self._egress_proxy is not None:
+                await self._egress_proxy.close()
 
         try:
             _worker().call(run(), timeout=20)
@@ -570,9 +581,18 @@ class PlaywrightSession(BrowserSession, SupportsFinalSubmission):
 
 
 class PlaywrightDriver(BrowserDriver):
-    def __init__(self, *, headless: bool, executable_path: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        headless: bool,
+        executable_path: str | None = None,
+        egress_proxy_factory: Callable[[], EgressFilterProxy] | None = None,
+    ) -> None:
         self._headless = headless
         self._executable_path = executable_path
+        # V0.13: every connection of a browser that must not reach private hosts goes
+        # through an EgressFilterProxy (tests inject one with a fake resolver).
+        self._egress_proxy_factory = egress_proxy_factory or EgressFilterProxy
 
     def launch(self, *, allow_private_hosts: bool) -> BrowserSession:
         async def run() -> PlaywrightSession:
@@ -588,9 +608,15 @@ class PlaywrightDriver(BrowserDriver):
             kwargs: dict[str, Any] = {"headless": self._headless}
             if self._executable_path:
                 kwargs["executable_path"] = self._executable_path
+            proxy: EgressFilterProxy | None = None
+            if not allow_private_hosts:
+                proxy = await self._egress_proxy_factory().start()
+                kwargs["args"] = proxy.chromium_args()
             try:
                 browser = await _playwright.chromium.launch(**kwargs)
             except Exception as exc:  # noqa: BLE001
+                if proxy is not None:
+                    await proxy.close()
                 logger.warning("Chromium could not be started (%s)", type(exc).__name__)
                 raise BrowserError(
                     "BROWSER_UNAVAILABLE",
@@ -621,6 +647,7 @@ class PlaywrightDriver(BrowserDriver):
                 page=page,
                 headless=self._headless,
                 allow_private=allow_private_hosts,
+                egress_proxy=proxy,
             )
 
             def on_crash() -> None:

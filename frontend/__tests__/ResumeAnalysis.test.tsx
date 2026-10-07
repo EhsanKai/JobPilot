@@ -36,6 +36,12 @@ describe("ResumeAnalysis", () => {
       reused: false,
       message: "Resume analysis started.",
     });
+    // The finished result is held back until the processing state has been seen: with a
+    // 5 ms poll interval it would otherwise replace that state before the test looks.
+    let finish: () => void = () => {};
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
     getResumeIntelligenceMock
       .mockResolvedValueOnce(
         makeIntelligence({
@@ -44,7 +50,10 @@ describe("ResumeAnalysis", () => {
           profile: null,
         })
       )
-      .mockResolvedValue(makeIntelligence());
+      .mockImplementation(async () => {
+        await finished;
+        return makeIntelligence();
+      });
 
     const user = userEvent.setup();
     render(<ResumeAnalysis resume={makeResume()} pollIntervalMs={5} />);
@@ -52,6 +61,7 @@ describe("ResumeAnalysis", () => {
 
     expect(processResumeMock).toHaveBeenCalledWith("resume-1", false);
     expect(await screen.findByText("Analyzing your resume...")).toBeInTheDocument();
+    finish();
 
     expect(await screen.findByText("3 skills detected")).toBeInTheDocument();
     expect(screen.getByText("1 work experience detected")).toBeInTheDocument();

@@ -1,4 +1,5 @@
 import shutil
+import uuid
 from pathlib import Path
 from typing import BinaryIO
 
@@ -42,3 +43,13 @@ class LocalFileStorage(FileStorage):
 
     def exists(self, *, reference: str) -> bool:
         return self._resolve(reference).exists()
+
+    def delete_owner(self, *, owner_id: str) -> int:
+        # Only ever a UUID: never let a caller turn this into "delete the storage root".
+        owner = str(uuid.UUID(owner_id))
+        directory = self._resolve(owner)
+        if directory == self._base_path or not directory.is_dir():
+            return 0
+        count = sum(1 for path in directory.rglob("*") if path.is_file())
+        shutil.rmtree(directory)
+        return count

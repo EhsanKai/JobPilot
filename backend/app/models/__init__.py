@@ -69,6 +69,12 @@ from app.models.job_requirement import (
 )
 from app.models.job_source_posting import JobSourcePosting
 from app.models.language import Language, LanguageProficiency, UserLanguage
+from app.models.privacy import (
+    CONSENT_POLICY_VERSIONS,
+    AuthSession,
+    ConsentCategory,
+    ConsentRecord,
+)
 from app.models.professional_profile import ProfessionalProfile, SeniorityLevel
 from app.models.resume import Resume, ResumeStatus
 from app.models.resume_profile import ResumeProfile, ResumeProfileStatus
@@ -88,6 +94,10 @@ from app.models.user_profile import UserProfile
 
 __all__ = [
     "User",
+    "AuthSession",
+    "ConsentCategory",
+    "ConsentRecord",
+    "CONSENT_POLICY_VERSIONS",
     "UserProfile",
     "ProfessionalProfile",
     "SeniorityLevel",

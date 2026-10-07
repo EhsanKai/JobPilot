@@ -39,3 +39,8 @@ class FileStorage(ABC):
     @abstractmethod
     def exists(self, *, reference: str) -> bool:
         """Whether a file still exists for the given reference."""
+
+    @abstractmethod
+    def delete_owner(self, *, owner_id: str) -> int:
+        """Remove every file stored for one owner (keys `{owner_id}/...`, V0.13 account
+        deletion). Returns how many files were removed; no-op if there are none."""

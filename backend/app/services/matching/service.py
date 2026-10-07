@@ -30,6 +30,7 @@ from app.ai.provider import (
     AIRateLimitError,
     AITimeoutError,
 )
+from app.ai.providers.disabled import AIProcessingDisabledByUserError
 from app.core.errors import AppError, ConflictError
 from app.core.logging import get_logger
 from app.models.candidate_profile_version import CandidateProfileVersion
@@ -330,6 +331,11 @@ def calculate_batch(db: Session, user: User, request: BatchMatchRequest) -> Batc
 # --- AI explanation -----------------------------------------------------------------
 
 _AI_ERRORS: tuple[tuple[type[AIError], int, str], ...] = (
+    (
+        AIProcessingDisabledByUserError,
+        409,
+        AIProcessingDisabledByUserError.user_message,
+    ),
     (
         AINotConfiguredError,
         503,

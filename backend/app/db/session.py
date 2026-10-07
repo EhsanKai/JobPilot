@@ -5,7 +5,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
-engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+# hide_parameters: in production, a failing statement's error (and so the logged traceback)
+# names the SQL but never the bound values -- CV text, answers, e-mail addresses.
+engine = create_engine(
+    settings.DATABASE_URL, pool_pre_ping=True, hide_parameters=settings.is_production
+)
 
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 

@@ -17,9 +17,8 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.ai.factory import get_ai_provider
 from app.ai.provider import AIProvider
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_user_ai_provider
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.automation import (
@@ -50,7 +49,7 @@ def start_session(
     request: StartRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> SessionRead:
     """Open the application's page in a controlled browser and discover its form. You
     start it explicitly; the page is the application's own URL, never one you send."""
@@ -149,7 +148,7 @@ def resume(
     request: ResumeRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> SessionRead:
     """Give the browser back to the assistant. It looks at the page first and keeps
     whatever you changed; with `fill` it then fills the fields that are still empty."""
@@ -184,7 +183,7 @@ def confirm_domain(
     request: ConfirmDomainRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> SessionRead:
     """Say that the website the browser moved to is part of this application."""
     controller.confirm_domain(db, current_user, application_id, session_id, request.host, provider)
@@ -200,7 +199,7 @@ def discover(
     session_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> SessionRead:
     """Read the page again (a new step, a section that opened, a field that appeared).
     Reads only: nothing on the page changes."""
@@ -215,7 +214,7 @@ def fill(
     request: FillRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> SessionRead:
     """Fill the approved answers into empty fields and check each one. Never overwrites
     what you changed, never ticks a consent, never submits."""
@@ -230,7 +229,7 @@ async def suggest(
     request: SuggestRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    provider: AIProvider = Depends(get_ai_provider),
+    provider: AIProvider = Depends(get_user_ai_provider),
 ) -> SuggestResponse:
     """Ask for AI suggestions for the mapped questions without an answer. They are only
     suggestions: you accept or edit them in the Questions section before anything is filled."""

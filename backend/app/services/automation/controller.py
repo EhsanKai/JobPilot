@@ -527,7 +527,7 @@ def _sync_fields(
 
 
 def _ai_usable(provider: AIProvider | None) -> bool:
-    return provider is not None and provider.name not in ("disabled", "unknown")
+    return provider is not None and provider.name not in ("disabled", "disabled-by-user", "unknown")
 
 
 def _copy_page_data(row: AutomationField, item: DiscoveredField, now: datetime) -> None:
